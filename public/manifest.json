@@ -1,0 +1,46 @@
+{
+  "name": "WorkTime - HR Boshqaruv Tizimi",
+  "short_name": "WorkTime",
+  "description": "Xodimlar, davomat va HR jarayonlarini boshqarish tizimi",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f6fa",
+  "theme_color": "#7c3aed",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Davomat",
+      "short_name": "Davomat",
+      "url": "/davomat",
+      "description": "Bugungi davomatni ko'rish"
+    },
+    {
+      "name": "Xodimlar",
+      "short_name": "Xodimlar",
+      "url": "/xodimlar",
+      "description": "Xodimlar ro'yxati"
+    },
+    {
+      "name": "Chat",
+      "short_name": "Chat",
+      "url": "/chat",
+      "description": "Xodimlar bilan chat"
+    }
+  ],
+  "categories": ["business", "productivity"],
+  "lang": "uz"
+}

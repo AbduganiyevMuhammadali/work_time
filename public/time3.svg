@@ -1,0 +1,19 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="400" viewBox="0 0 1400 400">
+  <defs>
+    <linearGradient id="g1" x1="0" x2="1">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#FFFFFF"/>
+    </linearGradient>
+  </defs>
+  <!-- Clock icon -->
+  <circle cx="200" cy="200" r="70" stroke="white" stroke-width="10" fill="none"/>
+  <line x1="200" y1="200" x2="200" y2="150" stroke="white" stroke-width="10" stroke-linecap="round"/>
+  <line x1="200" y1="200" x2="240" y2="200" stroke="white" stroke-width="10" stroke-linecap="round"/>
+  
+  <!-- Text -->
+  <text x="400" y="220" dominant-baseline="middle" text-anchor="start"
+        style='font-family: "Dancing Script", cursive; font-size:120px; font-optical-sizing: auto; letter-spacing:2px; fill:url(#g1);'>
+    Work-Time
+  </text>
+</svg>
