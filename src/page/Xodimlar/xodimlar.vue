@@ -94,8 +94,9 @@
                 <!-- Xodim -->
                 <td>
                   <div class="emp-cell">
-                    <div class="av" :style="{ background: emp.color + '22', color: emp.color }">
-                      {{ initials(emp.name) }}
+                    <div class="av" :style="!emp.photo ? { background: emp.color + '22', color: emp.color } : {}">
+                      <img v-if="emp.photo" :src="emp.photo" :alt="emp.name" class="av-img" />
+                      <template v-else>{{ initials(emp.name) }}</template>
                     </div>
                     <div class="emp-info">
                       <span class="emp-name">{{ emp.name }}</span>
@@ -190,18 +191,22 @@ const employees = ref([])
 // API dan xodimlarni yuklash va frontga mos formatga o'tkazish
 function mapUser(u) {
   return {
-    id:         u.id,
-    name:       u.fullname,
-    username:   u.username,
-    role:       u.role,
-    position:   u.position   || '',
-    department: u.department || '',
-    phone:      u.phone      || '',
-    startTime:  u.start_time || '09:00',
-    endTime:    u.end_time   || '18:00',
-    workDays:   Array.isArray(u.work_days) ? u.work_days.map(Number) : [0,1,2,3,4],
-    status:     u.emp_status || 'active',
-    color:      u.color      || COLORS[u.id % COLORS.length],
+    id:           u.id,
+    name:         u.fullname,
+    username:     u.username,
+    role:         u.role,
+    position:     u.position    || '',
+    department:   u.department  || '',
+    phone:        u.phone       || '',
+    startTime:    u.start_time  || '09:00',
+    endTime:      u.end_time    || '18:00',
+    workDays:     Array.isArray(u.work_days) ? u.work_days.map(Number) : [0,1,2,3,4],
+    status:       u.emp_status  || 'active',
+    color:        u.color       || COLORS[u.id % COLORS.length],
+    salary:       parseFloat(u.salary) || 0,
+    to_count_time: !!u.to_count_time,
+    face_id_name: u.face_id_name || null,
+    photo:        u.photo        || null,
   }
 }
 
@@ -237,31 +242,50 @@ const openModal = (emp) => {
 }
 
 const handleSave = async (data) => {
-  // Backend formatiga o'tkazish
   const payload = {
-    username:        data.username,
-    fullname:        data.name,
-    role:            data.role || 'Xodim',
-    password:        data.password        || undefined,
-    confirmPassword: data.confirmPassword || undefined,
-    position:   data.position,
-    department:  data.department,
-    phone:       data.phone,
-    start_time:  data.startTime,
-    end_time:    data.endTime,
-    work_days:   data.workDays,
-    color:       data.color || COLORS[employees.value.length % COLORS.length],
-    emp_status:  data.status,
+    username:      data.username,
+    fullname:      data.name,
+    role:          data.role || 'Xodim',
+    password:      data.password        || undefined,
+    position:      data.position,
+    department:    data.department,
+    phone:         data.phone,
+    start_time:    data.startTime,
+    end_time:      data.endTime,
+    work_days:     data.workDays,
+    color:         data.color || COLORS[employees.value.length % COLORS.length],
+    emp_status:    data.status,
+    salary:        data.salary || 0,
+    to_count_time: !!data.to_count_time,
+    face_id_name:  data.face_id_name || null,
   }
   try {
+    let savedUser
     if (data.id) {
-      const updated = await api.updateUser(data.id, payload)
+      savedUser = await api.updateUser(data.id, payload)
       const idx = employees.value.findIndex(e => e.id === data.id)
-      if (idx !== -1) employees.value[idx] = mapUser(updated)
+      if (idx !== -1) employees.value[idx] = mapUser(savedUser)
     } else {
-      const created = await api.createUser(payload)
-      employees.value.push(mapUser(created))
+      savedUser = await api.createUser(payload)
+      employees.value.push(mapUser(savedUser))
     }
+
+    // Rasm yuklash (alohida multipart so'rov)
+    const userId = savedUser?.id || data.id
+    if (userId && data._selectedFile) {
+      const fd = new FormData()
+      fd.append('photo', data._selectedFile)
+      const photoRes = await api.uploadPhoto(userId, fd)
+      if (photoRes.photo) {
+        const emp = employees.value.find(e => e.id === userId)
+        if (emp) emp.photo = photoRes.photo
+      }
+    } else if (userId && data._removePhoto) {
+      await api.deletePhoto(userId)
+      const emp = employees.value.find(e => e.id === userId)
+      if (emp) emp.photo = null
+    }
+
     modalOpen.value = false
   } catch (e) {
     alert(e.message)
@@ -492,6 +516,14 @@ tbody tr:hover td {
   font-size: 12px;
   font-weight: 700;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.av-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .emp-name {

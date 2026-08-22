@@ -18,6 +18,7 @@ import {
   CakeSlice, PartyPopper, RefreshCw,
   Check, X
 } from 'lucide-vue-next'
+import { api } from '@/api/api.js'
 
 ChartJS.register(
   Title, Tooltip, Legend,
@@ -27,212 +28,291 @@ ChartJS.register(
 
 const darkMode = inject('darkMode', ref(false))
 
-// ─── Animated counters ───
-const animatedValues = ref({ total: 0, present: 0, absent: 0, late: 0 })
-const targets = { total: 42, present: 31, absent: 8, late: 3 }
+// ─── Helpers ─────────────────────────────────────────────────
+function getTodayStr() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Tashkent' })
+}
 
-onMounted(() => {
+function userInitials(name) {
+  return (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
+}
+
+function formatMoney(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(0) + ' mln'
+  return n.toLocaleString()
+}
+function formatSom(n) { return (n / 1000000).toFixed(1) + ' mln' }
+function netSalary(r)  { return r.base + r.bonus - r.fine }
+
+const DEPT_COLORS = ['#7c3aed', '#ec4899', '#059669', '#f59e0b', '#06b6d4', '#9ca3af']
+const DAY_NAMES   = ['Ya', 'Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sh']
+
+// ─── Raw data ────────────────────────────────────────────────
+const loading      = ref(true)
+const users        = ref([])      // GET /users
+const faceIdToday  = ref([])      // GET /face-id/attendance?date=today
+const salaryData   = ref([])      // GET /oylik?month&year  → .data[]
+const allLeaves    = ref([])      // GET /leaves            → .data[]
+const weekFaceId   = ref([])      // GET /face-id/range?start&end
+
+// ─── Load all ────────────────────────────────────────────────
+async function loadAll() {
+  loading.value  = true
+  const today    = getTodayStr()
+  const month    = Number(today.slice(5, 7))
+  const year     = Number(today.slice(0, 4))
+  const weekStart = new Date(Date.now() - 6 * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Tashkent' })
+
+  const [uR, fR, sR, lR, wR] = await Promise.allSettled([
+    api.getUsers(),
+    api.getFaceIdAttendance(today),
+    api.getSalaries(month, year),
+    api.getLeaves(),
+    api.getFaceIdRange(weekStart, today),
+  ])
+
+  if (uR.status === 'fulfilled') users.value       = Array.isArray(uR.value) ? uR.value : []
+  if (fR.status === 'fulfilled') faceIdToday.value = fR.value?.data  || []   // { date, data:[...] }
+  if (sR.status === 'fulfilled') salaryData.value  = sR.value?.data  || []   // { month, year, data:[...] }
+  if (lR.status === 'fulfilled') allLeaves.value   = lR.value?.data  || []
+  if (wR.status === 'fulfilled') weekFaceId.value  = wR.value?.users || []   // { start, end, users:[...] }
+
+  loading.value = false
+  runCounters()
+}
+
+onMounted(loadAll)
+
+// ─── KPI computed ────────────────────────────────────────────
+const totalEmp = computed(() => users.value.length)
+
+// faceIdToday items: { id, name, status:'absent'|'late'|'on-time', arrival, departure, ... }
+const presentCount = computed(() =>
+  faceIdToday.value.filter(f => f.status !== 'absent').length
+)
+
+const lateCount = computed(() =>
+  faceIdToday.value.filter(f => f.status === 'late').length
+)
+
+const absentCount    = computed(() => Math.max(0, totalEmp.value - presentCount.value))
+const attendanceRate = computed(() => totalEmp.value > 0 ? Math.round((presentCount.value / totalEmp.value) * 100) : 0)
+const pendingLeaveCnt = computed(() => allLeaves.value.filter(l => l.status === 'pending').length)
+
+// ─── Animated counters ───────────────────────────────────────
+const animatedValues = ref({ total: 0, present: 0, absent: 0, late: 0 })
+
+function runCounters() {
+  const targets = { total: totalEmp.value, present: presentCount.value, absent: absentCount.value, late: lateCount.value }
   Object.keys(targets).forEach(key => {
-    const target = targets[key]
-    let count = 0
-    const timer = setInterval(() => {
-      count++
-      animatedValues.value[key] = Math.min(Math.round((target / 60) * count), target)
-      if (count >= 60) clearInterval(timer)
+    const t = targets[key]; let f = 0
+    const id = setInterval(() => {
+      f++
+      animatedValues.value[key] = Math.min(Math.round((t / 40) * f), t)
+      if (f >= 40) clearInterval(id)
     }, 16)
   })
-})
+}
 
-// ─── KPI cards ───
+// ─── KPI cards ───────────────────────────────────────────────
 const kpiCards = computed(() => [
-  {
-    key: 'total',   label: 'Jami xodimlar',   value: animatedValues.value.total,
-    change: '+2 bu oy',   positive: true,   icon: Users,
-    accent: '#7c3aed',
-    lightBg: darkMode.value ? 'rgba(124,58,237,0.15)' : '#ede9fe',
-    borderColor: darkMode.value ? 'rgba(124,58,237,0.5)' : '#c4b5fd'
-  },
-  {
-    key: 'present', label: 'Bugun kelgan',    value: animatedValues.value.present,
-    change: '+3 kechagidan', positive: true,  icon: UserCheck,
-    accent: '#059669',
-    lightBg: darkMode.value ? 'rgba(5,150,105,0.15)' : '#d1fae5',
-    borderColor: darkMode.value ? 'rgba(5,150,105,0.5)' : '#6ee7b7'
-  },
-  {
-    key: 'absent',  label: 'Kelmagan',        value: animatedValues.value.absent,
-    change: '-1 kechagidan', positive: true,  icon: UserX,
-    accent: '#dc2626',
-    lightBg: darkMode.value ? 'rgba(220,38,38,0.15)' : '#fee2e2',
-    borderColor: darkMode.value ? 'rgba(220,38,38,0.5)' : '#fca5a5'
-  },
-  {
-    key: 'late',    label: 'Kech qolgan',     value: animatedValues.value.late,
-    change: "-2 haftalik o'rtacha", positive: true, icon: Clock,
-    accent: '#d97706',
-    lightBg: darkMode.value ? 'rgba(217,119,6,0.15)' : '#fef3c7',
-    borderColor: darkMode.value ? 'rgba(217,119,6,0.5)' : '#fde68a'
-  }
+  { key:'total',   label:'Jami xodimlar', value: animatedValues.value.total,   change: attendanceRate.value + '% davomat',          positive: true,                   icon: Users,     accent:'#7c3aed', lightBg: darkMode.value?'rgba(124,58,237,0.15)':'#ede9fe', borderColor: darkMode.value?'rgba(124,58,237,0.5)':'#c4b5fd' },
+  { key:'present', label:'Bugun kelgan',  value: animatedValues.value.present, change: lateCount.value + ' ta kechikkan',           positive: true,                   icon: UserCheck, accent:'#059669', lightBg: darkMode.value?'rgba(5,150,105,0.15)':'#d1fae5',  borderColor: darkMode.value?'rgba(5,150,105,0.5)':'#6ee7b7'  },
+  { key:'absent',  label:'Kelmagan',      value: animatedValues.value.absent,  change: totalEmp.value + ' xodimdan',                positive: absentCount.value===0,  icon: UserX,     accent:'#dc2626', lightBg: darkMode.value?'rgba(220,38,38,0.15)':'#fee2e2',  borderColor: darkMode.value?'rgba(220,38,38,0.5)':'#fca5a5'  },
+  { key:'late',    label:'Kech qolgan',   value: animatedValues.value.late,    change: attendanceRate.value + '% vaqtida kelgan',   positive: lateCount.value===0,    icon: Clock,     accent:'#d97706', lightBg: darkMode.value?'rgba(217,119,6,0.15)':'#fef3c7',  borderColor: darkMode.value?'rgba(217,119,6,0.5)':'#fde68a'  },
 ])
 
-// ─── Quick actions ───
-const quickActions = [
-  { label: "Xodim qo'shish",    icon: UserPlus,    color: '#7c3aed', bg: 'rgba(124,58,237,0.1)',  count: null,         info: '42 ta xodim',      modal: 'addEmployee'  },
-  { label: 'Davomat belgilash', icon: CalendarDays, color: '#059669', bg: 'rgba(5,150,105,0.1)',   count: '8 kutmoqda', info: 'Bugungi ro\'yxat', modal: 'markAttend'   },
-  { label: 'Hisobot yaratish',  icon: FileText,    color: '#0891b2', bg: 'rgba(8,145,178,0.1)',   count: null,         info: 'Mart 2026',        modal: 'genReport'    },
-  { label: "Ta'til so'rash",    icon: CalendarOff,  color: '#d97706', bg: 'rgba(217,119,6,0.1)',   count: '3 kutmoqda', info: "Yangi so'rov",     modal: 'leaveReq'     },
-  { label: 'Maosh hisoblash',   icon: Wallet,      color: '#dc2626', bg: 'rgba(220,38,38,0.1)',   count: null,         info: 'Mart 2026',        modal: 'calcSalary'   },
-  { label: 'Ma\'lumot yangilash', icon: RefreshCw,  color: '#6b7280', bg: 'rgba(107,114,128,0.1)', count: null,        info: 'Sinxronizatsiya',  modal: 'refresh'      },
-]
+// ─── Quick actions (real counts) ─────────────────────────────
+const curMonthLbl = new Date().toLocaleDateString('uz-UZ', { month: 'long', year: 'numeric' })
+const quickActions = computed(() => [
+  { label:"Xodim qo'shish",    icon:UserPlus,    color:'#7c3aed', bg:'rgba(124,58,237,0.1)', count:null,                                                      info: totalEmp.value + ' ta xodim',     modal:'addEmployee' },
+  { label:'Davomat belgilash', icon:CalendarDays, color:'#059669', bg:'rgba(5,150,105,0.1)',  count:absentCount.value>0 ? absentCount.value+' kelmagan':null,  info:"Bugungi ro'yxat",                  modal:'markAttend'  },
+  { label:'Hisobot yaratish',  icon:FileText,    color:'#0891b2', bg:'rgba(8,145,178,0.1)',  count:null,                                                      info: curMonthLbl,                       modal:'genReport'   },
+  { label:"Ta'til so'rash",    icon:CalendarOff,  color:'#d97706', bg:'rgba(217,119,6,0.1)',  count:pendingLeaveCnt.value>0 ? pendingLeaveCnt.value+' kutmoqda':null, info:"Yangi so'rov",             modal:'leaveReq'    },
+  { label:'Maosh hisoblash',   icon:Wallet,      color:'#dc2626', bg:'rgba(220,38,38,0.1)',  count:null,                                                      info: curMonthLbl,                       modal:'calcSalary'  },
+  { label:"Yangilash",         icon:RefreshCw,   color:'#6b7280', bg:'rgba(107,114,128,0.1)',count:null,                                                      info:'Sinxronizatsiya',                   modal:'refresh'     },
+])
 
-// ─── Modal system ───
-const activeModal = ref(null)
+// ─── Modal system ────────────────────────────────────────────
+const activeModal  = ref(null)
 const modalSuccess = ref(false)
-let refreshing = ref(false)
+const refreshing   = ref(false)
 
 function openModal(key) {
   if (key === 'refresh') { doRefresh(); return }
   modalSuccess.value = false
-  activeModal.value = key
+  activeModal.value  = key
 }
+function closeModal() { activeModal.value = null; modalSuccess.value = false }
 
-function closeModal() {
-  activeModal.value = null
-  modalSuccess.value = false
-}
-
-function submitModal() {
-  modalSuccess.value = true
-  setTimeout(() => closeModal(), 1600)
-}
-
-function doRefresh() {
+async function doRefresh() {
   refreshing.value = true
-  setTimeout(() => { refreshing.value = false }, 1400)
+  await loadAll()
+  refreshing.value = false
 }
 
-// ─── Modal: Xodim qo'shish ───
-const newEmployee = ref({
-  firstName: '', lastName: '', phone: '', email: '',
-  department: '', role: '', startDate: '', salary: ''
+// ─── Today attendance list ────────────────────────────────────
+// faceIdToday already contains ALL users with their status from backend
+const todayList = computed(() =>
+  faceIdToday.value.map(f => ({
+    id:       f.id,
+    name:     f.name,
+    role:     f.position || f.department || '',
+    time:     f.arrival  || '—',
+    // backend uses 'on-time' / 'late' / 'absent'; map to UI keys
+    status:   f.status === 'on-time' ? 'arrived' : (f.status === 'late' ? 'late' : 'absent'),
+    initials: userInitials(f.name),
+    color:    f.color || '#7c3aed',
+  }))
+)
+
+const statusMap = {
+  arrived: { label:'Keldi',   color:'#059669', bg:'#d1fae5', bgDark:'rgba(5,150,105,0.18)',  icon: CheckCircle2 },
+  late:    { label:'Kech',    color:'#d97706', bg:'#fef3c7', bgDark:'rgba(217,119,6,0.18)',  icon: AlertCircle  },
+  absent:  { label:'Kelmadi', color:'#dc2626', bg:'#fee2e2', bgDark:'rgba(220,38,38,0.18)',  icon: XCircle      },
+}
+function statusBg(s) { return darkMode.value ? statusMap[s].bgDark : statusMap[s].bg }
+
+// ─── Department headcount ─────────────────────────────────────
+const departments = computed(() => {
+  const map = {}
+  users.value.forEach(u => { const d = u.department||'Boshqa'; map[d] = (map[d]||0)+1 })
+  const total = users.value.length || 1
+  return Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([name,count],i) => ({ name, count, total, color: DEPT_COLORS[i%DEPT_COLORS.length] }))
 })
 
-const departments_list = ['Development', 'Design', 'QA', 'Management', 'DevOps', 'Other']
+// ─── Leave requests ───────────────────────────────────────────
+const leaveRequests = computed(() => allLeaves.value.map(l => ({
+  id:       l.id,
+  name:     l.employeeName,
+  initials: userInitials(l.employeeName),
+  color:    l.color || '#7c3aed',
+  type:     { annual:"Yillik ta'til", sick:'Kasallik', unpaid:'Haqsiz', maternity:"Tug'ruq", other:'Boshqa' }[l.type] || l.type,
+  from:     l.start_date ? l.start_date.slice(5).replace('-','-') : '—',
+  to:       l.end_date   ? l.end_date.slice(5).replace('-','-')   : '—',
+  days:     l.start_date && l.end_date ? Math.max(1, Math.round((new Date(l.end_date)-new Date(l.start_date))/86400000)+1) : 0,
+  reason:   l.reason || '',
+  status:   l.status,
+})))
 
-function submitAddEmployee() {
-  if (!newEmployee.value.firstName || !newEmployee.value.lastName || !newEmployee.value.department) return
-  submitModal()
-  newEmployee.value = { firstName:'', lastName:'', phone:'', email:'', department:'', role:'', startDate:'', salary:'' }
+const leaveStatusMap = {
+  pending:  { label:"Ko'rib chiqilmoqda", color:'#d97706', bg:'#fef3c7', bgDark:'rgba(217,119,6,0.2)'  },
+  approved: { label:'Tasdiqlandi',        color:'#059669', bg:'#d1fae5', bgDark:'rgba(5,150,105,0.2)'  },
+  rejected: { label:'Rad etildi',         color:'#dc2626', bg:'#fee2e2', bgDark:'rgba(220,38,38,0.2)'  },
 }
 
-// ─── Modal: Davomat belgilash ───
-const attendDate = ref(new Date().toISOString().slice(0, 10))
-const attendList = ref([
-  { name: 'Alisher Nazarov',   initials: 'AN', color: '#7c3aed', status: 'arrived' },
-  { name: 'Malika Yusupova',   initials: 'MY', color: '#f59e0b', status: 'absent'  },
-  { name: 'Bobur Toshmatov',   initials: 'BT', color: '#ef4444', status: 'absent'  },
-  { name: 'Nilufar Rahimova',  initials: 'NR', color: '#059669', status: 'arrived' },
-  { name: 'Jasur Mirzayev',    initials: 'JM', color: '#06b6d4', status: 'arrived' },
-  { name: 'Dilorom Hasanova',  initials: 'DH', color: '#ec4899', status: 'late'    },
-  { name: 'Sardor Qodirov',    initials: 'SQ', color: '#6366f1', status: 'absent'  },
+async function approveLeave(i) {
+  const req = leaveRequests.value[i]
+  if (!req) return
+  await api.updateLeave(req.id, { status: 'approved' })
+  const l = allLeaves.value.find(x => x.id === req.id)
+  if (l) l.status = 'approved'
+}
+async function rejectLeave(i) {
+  const req = leaveRequests.value[i]
+  if (!req) return
+  await api.updateLeave(req.id, { status: 'rejected' })
+  const l = allLeaves.value.find(x => x.id === req.id)
+  if (l) l.status = 'rejected'
+}
+
+// ─── Top performers ───────────────────────────────────────────
+const rankColors   = ['#f59e0b', '#9ca3af', '#c2773d', '#6b7280', '#6b7280']
+const perfIcons    = [Trophy, Medal, Star, Star, Star]
+const topPerformers = computed(() => {
+  const total = salaryData.value[0]?.totalWorkDays || 1
+  return salaryData.value
+    .map(u => ({ id:u.id, name:u.name, role:u.position||u.department||'', rate:Math.min(100,Math.round((u.workedDays/total)*100)), initials:userInitials(u.name), color:u.color||'#7c3aed' }))
+    .filter(u => u.rate > 0)
+    .sort((a,b) => b.rate - a.rate)
+    .slice(0, 5)
+    .map((u,i) => ({ ...u, rank:i+1, icon:perfIcons[i] }))
+})
+
+// ─── Salary overview ─────────────────────────────────────────
+const salary = computed(() => {
+  const dMap = {}
+  let total = 0, paid = 0
+  salaryData.value.forEach(u => {
+    total += u.salary || 0
+    if (u.paid) paid += u.salary || 0
+    const d = u.department || 'Boshqa'
+    dMap[d] = (dMap[d]||0) + (u.salary||0)
+  })
+  return {
+    total, paid, pending: total - paid,
+    byDept: Object.entries(dMap).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([dept,amount],i) => ({ dept, amount, color: DEPT_COLORS[i%DEPT_COLORS.length] }))
+  }
+})
+const paidPercent = computed(() => salary.value.total > 0 ? Math.round((salary.value.paid/salary.value.total)*100) : 0)
+
+// ─── Salary calc modal ────────────────────────────────────────
+const salaryCalc = ref({ employee:'all', month:new Date().toISOString().slice(0,7), department:'all' })
+const salaryResults = computed(() =>
+  salaryData.value.map(u => ({ name:u.name, base:u.salary||0, bonus:u.bonus||0, fine:u.fine||0, attend:u.totalWorkDays>0?Math.round((u.workedDays/u.totalWorkDays)*100):0 }))
+)
+
+// ─── Weekly chart data ────────────────────────────────────────
+const weekDays = computed(() => {
+  const days = []
+  for (let i=6; i>=0; i--) days.push(new Date(Date.now()-i*86400000).toLocaleDateString('en-CA',{timeZone:'Asia/Tashkent'}))
+  return days
+})
+
+const lineChartData = computed(() => {
+  // weekFaceId items: { id, name, days: { 'YYYY-MM-DD': { in, out, status, penalty } } }
+  const present = weekDays.value.map(day =>
+    weekFaceId.value.filter(u => u.days?.[day]?.in).length
+  )
+  const late = weekDays.value.map(day =>
+    weekFaceId.value.filter(u => u.days?.[day]?.status === 'late').length
+  )
+  const absent = weekDays.value.map((_, i) => Math.max(0, totalEmp.value - present[i]))
+  return {
+    labels: weekDays.value.map(d => DAY_NAMES[new Date(d+'T12:00:00').getDay()]),
+    datasets: [
+      { label:'Kelgan',     data:present, borderColor:'#7c3aed', backgroundColor:'rgba(124,58,237,0.08)', tension:0.45, borderWidth:2.5, fill:true,  pointBackgroundColor:'#7c3aed', pointBorderColor:'#fff', pointBorderWidth:2, pointRadius:5, pointHoverRadius:7 },
+      { label:'Kelmagan',   data:absent,  borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,0.06)',  tension:0.45, borderWidth:2,   fill:true,  pointBackgroundColor:'#ef4444', pointBorderColor:'#fff', pointBorderWidth:2, pointRadius:5, pointHoverRadius:7 },
+      { label:'Kech qolgan',data:late,    borderColor:'#f59e0b', backgroundColor:'rgba(245,158,11,0.06)', tension:0.45, borderWidth:2,   fill:false, pointBackgroundColor:'#f59e0b', pointBorderColor:'#fff', pointBorderWidth:2, pointRadius:5, pointHoverRadius:7 },
+    ]
+  }
+})
+
+// ─── Donut chart ─────────────────────────────────────────────
+const donutData = computed(() => ({
+  labels: ['Kelgan', 'Kelmagan', 'Kech qolgan'],
+  datasets: [{ data: [Math.max(0,presentCount.value-lateCount.value), absentCount.value, lateCount.value], backgroundColor:['#7c3aed','#ef4444','#f59e0b'], borderColor:'transparent', borderWidth:3, hoverOffset:6 }]
+}))
+
+const donutStats = computed(() => [
+  { label:'Kelgan',     val: Math.max(0,presentCount.value-lateCount.value), color:'#7c3aed' },
+  { label:'Kelmagan',   val: absentCount.value,                              color:'#ef4444' },
+  { label:'Kech qolgan',val: lateCount.value,                                color:'#f59e0b' },
 ])
 
-const attendStatusOpts = [
-  { val: 'arrived', label: 'Keldi',   color: '#059669' },
-  { val: 'late',    label: 'Kech',    color: '#d97706' },
-  { val: 'absent',  label: 'Kelmadi', color: '#ef4444' },
-]
+// ─── HR Activity (static – no backend source yet) ────────────
+const activities = ref([
+  { type:'hire',    icon:UserPlus,      color:'#059669', bg:'#d1fae5', bgDark:'rgba(5,150,105,0.18)',  title:"Yangi xodim qo'shildi",  desc:'Tizim orqali qo\'shildi',        time:'Bugun'     },
+  { type:'leave',   icon:CheckCircle2,  color:'#0891b2', bg:'#e0f2fe', bgDark:'rgba(8,145,178,0.18)',  title:"Ta'til so'rovi",          desc:'Yangi so\'rov kelib tushdi',      time:'Bugun'     },
+  { type:'warning', icon:ShieldAlert,   color:'#d97706', bg:'#fef3c7', bgDark:'rgba(217,119,6,0.18)',  title:'Kech qolish',             desc:'Face ID dan belgilandi',          time:'Kecha'     },
+  { type:'promote', icon:ArrowUpCircle, color:'#7c3aed', bg:'#ede9fe', bgDark:'rgba(124,58,237,0.18)', title:'Maosh yangilandi',         desc:'Oylik hisoboti yaratildi',        time:'Kecha'     },
+  { type:'award',   icon:Award,         color:'#f59e0b', bg:'#fef3c7', bgDark:'rgba(245,158,11,0.18)', title:'Eng faol xodim',          desc:'Davomat hisobotidan', time:'Bu oy' },
+])
+function actBg(act) { return darkMode.value ? act.bgDark : act.bg }
 
-// ─── Modal: Hisobot yaratish ───
-const report = ref({
-  type: 'attend', period: new Date().toISOString().slice(0, 7),
-  department: 'all', format: 'pdf'
-})
-
-const reportTypes = [
-  { val: 'attend', label: 'Davomat hisoboti',        icon: '📋' },
-  { val: 'salary', label: 'Maosh hisoboti',           icon: '💰' },
-  { val: 'perf',   label: 'Samaradorlik hisoboti',    icon: '📊' },
-  { val: 'all',    label: 'Umumiy hisobot',           icon: '📁' },
-]
-
-// ─── Modal: Ta'til so'rash ───
-const leaveForm = ref({
-  employee: '', type: 'annual', from: '', to: '', reason: ''
-})
-
-const leaveTypes = [
-  { val: 'annual',  label: "Yillik ta'til"        },
-  { val: 'sick',    label: 'Kasallik varaqasi'    },
-  { val: 'short',   label: "Qisqa ta'til (1 kun)" },
-  { val: 'reason',  label: 'Uzrli sabab'          },
-  { val: 'unpaid',  label: "Haqsiz ta'til"        },
-]
-
-const leaveDays = computed(() => {
-  if (!leaveForm.value.from || !leaveForm.value.to) return 0
-  const ms = new Date(leaveForm.value.to) - new Date(leaveForm.value.from)
-  return Math.max(0, Math.round(ms / 86400000) + 1)
-})
-
-// ─── Modal: Maosh hisoblash ───
-const salaryCalc = ref({
-  employee: 'all', month: new Date().toISOString().slice(0, 7),
-  department: 'all'
-})
-
-const salaryResults = ref([
-  { name: 'Alisher Nazarov',  base: 5500000, bonus: 550000, fine: 0,      attend: 98 },
-  { name: 'Malika Yusupova',  base: 4800000, bonus: 200000, fine: 150000, attend: 88 },
-  { name: 'Bobur Toshmatov',  base: 6200000, bonus: 620000, fine: 200000, attend: 92 },
-  { name: 'Nilufar Rahimova', base: 4200000, bonus: 420000, fine: 0,      attend: 98 },
-  { name: 'Jasur Mirzayev',   base: 5800000, bonus: 580000, fine: 0,      attend: 96 },
+// ─── Upcoming events (static – no birthday field yet) ────────
+const upcomingEvents = ref([
+  { name:'—', initials:'—', color:'#7c3aed', type:'birthday',    label:"Tug'ilgan kun",   date:'Ma\'lumot yo\'q', icon:CakeSlice   },
+  { name:'—', initials:'—', color:'#059669', type:'anniversary', label:'Yubiley',          date:'Ma\'lumot yo\'q', icon:PartyPopper },
 ])
 
-function netSalary(r) { return r.base + r.bonus - r.fine }
-function formatSom(n) { return (n / 1000000).toFixed(2) + ' mln' }
-
-// ─── Chart theme ───
+// ─── Chart theme & options ────────────────────────────────────
 const chartTheme = computed(() => ({
   gridColor:   darkMode.value ? '#252340' : '#f3f4f6',
   tickColor:   darkMode.value ? '#4f4d62' : '#9ca3af',
   tooltipBg:   darkMode.value ? '#1a1829' : '#1f2937',
-  legendColor: darkMode.value ? '#c4bfdd' : '#6b7280'
+  legendColor: darkMode.value ? '#c4bfdd' : '#6b7280',
 }))
-
-// ─── Line chart ───
-const lineChartData = {
-  labels: ['Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sh', 'Ya'],
-  datasets: [
-    {
-      label: 'Kelgan',
-      data: [38, 40, 35, 39, 31, 18, 6],
-      borderColor: '#7c3aed',
-      backgroundColor: 'rgba(124,58,237,0.08)',
-      tension: 0.45, borderWidth: 2.5, fill: true,
-      pointBackgroundColor: '#7c3aed', pointBorderColor: '#fff', pointBorderWidth: 2,
-      pointRadius: 5, pointHoverRadius: 7
-    },
-    {
-      label: 'Kelmagan',
-      data: [4, 2, 7, 3, 8, 18, 30],
-      borderColor: '#ef4444',
-      backgroundColor: 'rgba(239,68,68,0.06)',
-      tension: 0.45, borderWidth: 2, fill: true,
-      pointBackgroundColor: '#ef4444', pointBorderColor: '#fff', pointBorderWidth: 2,
-      pointRadius: 5, pointHoverRadius: 7
-    },
-    {
-      label: 'Kech qolgan',
-      data: [2, 1, 3, 2, 4, 2, 1],
-      borderColor: '#f59e0b',
-      backgroundColor: 'rgba(245,158,11,0.06)',
-      tension: 0.45, borderWidth: 2, fill: false,
-      pointBackgroundColor: '#f59e0b', pointBorderColor: '#fff', pointBorderWidth: 2,
-      pointRadius: 5, pointHoverRadius: 7
-    }
-  ]
-}
 
 const lineChartOptions = computed(() => ({
   responsive: true, maintainAspectRatio: false,
@@ -255,16 +335,6 @@ const lineChartOptions = computed(() => ({
   }
 }))
 
-// ─── Donut chart ───
-const donutData = {
-  labels: ['Kelgan', 'Kelmagan', 'Kech qolgan', 'Sababli'],
-  datasets: [{
-    data: [31, 5, 3, 3],
-    backgroundColor: ['#7c3aed', '#ef4444', '#f59e0b', '#06b6d4'],
-    borderColor: 'transparent', borderWidth: 3, hoverOffset: 6
-  }]
-}
-
 const donutOptions = computed(() => ({
   responsive: true, maintainAspectRatio: false, cutout: '74%',
   plugins: {
@@ -276,116 +346,74 @@ const donutOptions = computed(() => ({
   }
 }))
 
-// ─── Today's attendance ───
-const todayList = ref([
-  { name: 'Alisher Nazarov',  role: 'Frontend Developer', time: '08:45', status: 'arrived', initials: 'AN', color: '#7c3aed' },
-  { name: 'Malika Yusupova',  role: 'UI/UX Designer',     time: '09:12', status: 'late',    initials: 'MY', color: '#f59e0b' },
-  { name: 'Bobur Toshmatov',  role: 'Backend Developer',  time: '—',     status: 'absent',  initials: 'BT', color: '#ef4444' },
-  { name: 'Nilufar Rahimova', role: 'QA Engineer',        time: '08:55', status: 'arrived', initials: 'NR', color: '#059669' },
-  { name: 'Jasur Mirzayev',   role: 'DevOps Engineer',    time: '08:30', status: 'arrived', initials: 'JM', color: '#06b6d4' },
-  { name: 'Dilorom Hasanova', role: 'Project Manager',    time: '09:20', status: 'late',    initials: 'DH', color: '#ec4899' },
-  { name: 'Sardor Qodirov',   role: 'Mobile Developer',   time: '—',     status: 'absent',  initials: 'SQ', color: '#6366f1' },
-])
+// ─── Modal: Xodim qo'shish ───────────────────────────────────
+const newEmployee = ref({ firstName:'', lastName:'', phone:'', email:'', department:'', role:'', startDate:'', salary:'' })
+const departments_list = ['IT', 'HR', 'Moliya', 'Savdo', 'Design', 'Boshqa']
 
-const statusMap = {
-  arrived: { label: 'Keldi',   color: '#059669', bg: '#d1fae5', bgDark: 'rgba(5,150,105,0.18)',  icon: CheckCircle2 },
-  late:    { label: 'Kech',    color: '#d97706', bg: '#fef3c7', bgDark: 'rgba(217,119,6,0.18)',  icon: AlertCircle },
-  absent:  { label: 'Kelmadi', color: '#dc2626', bg: '#fee2e2', bgDark: 'rgba(220,38,38,0.18)',  icon: XCircle }
+async function submitAddEmployee() {
+  if (!newEmployee.value.firstName || !newEmployee.value.lastName) return
+  try {
+    const username = (newEmployee.value.firstName + newEmployee.value.lastName).toLowerCase().replace(/\s/g,'').slice(0,15)
+    await api.createUser({
+      username, password: '123456', role: 'Xodim',
+      fullname:   newEmployee.value.firstName + ' ' + newEmployee.value.lastName,
+      department: newEmployee.value.department,
+      position:   newEmployee.value.role,
+      phone:      newEmployee.value.phone,
+      salary:     Number(newEmployee.value.salary) || 0,
+    })
+    modalSuccess.value = true
+    setTimeout(() => closeModal(), 1600)
+    newEmployee.value = { firstName:'', lastName:'', phone:'', email:'', department:'', role:'', startDate:'', salary:'' }
+    users.value = await api.getUsers() || []
+  } catch(e) { alert(e.message) }
 }
 
-function statusBg(status) {
-  return darkMode.value ? statusMap[status].bgDark : statusMap[status].bg
-}
+// ─── Modal: Davomat belgilash ────────────────────────────────
+const attendDate    = ref(getTodayStr())
+const attendList    = computed(() => todayList.value.map(e => ({ ...e })))
+const attendStatusOpts = [
+  { val:'arrived', label:'Keldi',   color:'#059669' },
+  { val:'late',    label:'Kech',    color:'#d97706' },
+  { val:'absent',  label:'Kelmadi', color:'#ef4444' },
+]
 
-// ─── Pending Leave Requests ───
-const leaveRequests = ref([
-  { name: 'Kamola Ergasheva',  initials: 'KE', color: '#ec4899', type: "Yillik ta'til",   from: '10-mart', to: '17-mart', days: 8,  reason: 'Oilaviy masala',    status: 'pending'  },
-  { name: 'Doniyor Xoliqov',   initials: 'DX', color: '#6366f1', type: "Kasallik varaqasi", from: '6-mart',  to: '8-mart',  days: 3,  reason: 'Shifokor ko\'rsatmasi', status: 'pending' },
-  { name: 'Zulfiya Nazarova',  initials: 'ZN', color: '#f59e0b', type: "Qisqa ta'til",   from: '7-mart',  to: '7-mart',  days: 1,  reason: 'Shaxsiy sabab',     status: 'approved' },
-  { name: 'Mirzo Toshpulatov', initials: 'MT', color: '#059669', type: "Yillik ta'til",   from: '15-mart', to: '22-mart', days: 7,  reason: 'Dam olish',         status: 'pending'  },
-  { name: 'Sarvinoz Holova',   initials: 'SH', color: '#7c3aed', type: "Uzrli sabab",     from: '9-mart',  to: '9-mart',  days: 1,  reason: 'Hujjat topshirish', status: 'rejected' },
-])
-
-const leaveStatusMap = {
-  pending:  { label: "Ko'rib chiqilmoqda", color: '#d97706', bg: '#fef3c7', bgDark: 'rgba(217,119,6,0.2)'  },
-  approved: { label: 'Tasdiqlandi',        color: '#059669', bg: '#d1fae5', bgDark: 'rgba(5,150,105,0.2)'  },
-  rejected: { label: 'Rad etildi',         color: '#dc2626', bg: '#fee2e2', bgDark: 'rgba(220,38,38,0.2)'  }
-}
-
-function approveLeave(idx) { leaveRequests.value[idx].status = 'approved' }
-function rejectLeave(idx)  { leaveRequests.value[idx].status = 'rejected' }
-
-// ─── Recent HR Activity ───
-const activities = ref([
-  { type: 'hire',      icon: UserPlus,      color: '#059669', bg: '#d1fae5', bgDark: 'rgba(5,150,105,0.18)',   title: 'Yangi xodim qabul qilindi',      desc: 'Rustam Qodirov — Backend Developer',    time: '1 soat oldin'    },
-  { type: 'promote',   icon: ArrowUpCircle, color: '#7c3aed', bg: '#ede9fe', bgDark: 'rgba(124,58,237,0.18)',  title: 'Lavozim oshirildi',               desc: 'Alisher Nazarov — Senior Developer ga',  time: '3 soat oldin'    },
-  { type: 'resign',    icon: UserMinus,     color: '#ef4444', bg: '#fee2e2', bgDark: 'rgba(239,68,68,0.18)',   title: 'Iste\'foga ariza berdi',          desc: 'Behzod Karimov — QA Engineer',           time: 'Kecha'           },
-  { type: 'warning',   icon: ShieldAlert,   color: '#d97706', bg: '#fef3c7', bgDark: 'rgba(217,119,6,0.18)',   title: 'Ogohlantirish berildi',           desc: 'Kech kelish sababi — Doniyor X.',        time: 'Kecha'           },
-  { type: 'leave',     icon: CheckCircle2,  color: '#0891b2', bg: '#e0f2fe', bgDark: 'rgba(8,145,178,0.18)',   title: "Ta'til tasdiqlandi",              desc: "Zulfiya Nazarova — 1 kunlik ta'til",    time: '2 kun oldin'     },
-  { type: 'award',     icon: Award,         color: '#f59e0b', bg: '#fef3c7', bgDark: 'rgba(245,158,11,0.18)',  title: 'Oy xodimi tanlandi',              desc: 'Nilufar Rahimova — Mart 2026',           time: '3 kun oldin'     },
-])
-
-function actBg(act) {
-  return darkMode.value ? act.bgDark : act.bg
-}
-
-// ─── Top Performers ───
-const topPerformers = ref([
-  { rank: 1, name: 'Nilufar Rahimova',  role: 'QA Engineer',        rate: 98, initials: 'NR', color: '#059669', icon: Trophy },
-  { rank: 2, name: 'Jasur Mirzayev',    role: 'DevOps Engineer',    rate: 96, initials: 'JM', color: '#7c3aed', icon: Medal  },
-  { rank: 3, name: 'Alisher Nazarov',   role: 'Frontend Developer', rate: 94, initials: 'AN', color: '#0891b2', icon: Star   },
-  { rank: 4, name: 'Dilorom Hasanova',  role: 'Project Manager',    rate: 91, initials: 'DH', color: '#ec4899', icon: Star   },
-  { rank: 5, name: 'Malika Yusupova',   role: 'UI/UX Designer',     rate: 88, initials: 'MY', color: '#f59e0b', icon: Star   },
-])
-
-const rankColors = ['#f59e0b', '#9ca3af', '#c2773d', '#6b7280', '#6b7280']
-
-// ─── Salary Overview ───
-const salary = ref({
-  total:   180000000,
-  paid:    145000000,
-  pending:  35000000,
-  byDept: [
-    { dept: 'Development', amount: 68000000, color: '#7c3aed' },
-    { dept: 'Design',      amount: 32000000, color: '#ec4899' },
-    { dept: 'QA',          amount: 28000000, color: '#059669' },
-    { dept: 'Management',  amount: 30000000, color: '#f59e0b' },
-    { dept: 'DevOps',      amount: 22000000, color: '#06b6d4' },
-  ]
+// ─── Modal: Ta'til so'rash ───────────────────────────────────
+const leaveForm = ref({ employee:'', type:'annual', from:'', to:'', reason:'' })
+const leaveTypes = [
+  { val:'annual',    label:"Yillik ta'til"   },
+  { val:'sick',      label:'Kasallik varaqasi'},
+  { val:'unpaid',    label:"Haqsiz ta'til"   },
+  { val:'maternity', label:"Tug'ruq ta'tili" },
+  { val:'other',     label:'Boshqa'          },
+]
+const leaveDays = computed(() => {
+  if (!leaveForm.value.from || !leaveForm.value.to) return 0
+  return Math.max(0, Math.round((new Date(leaveForm.value.to) - new Date(leaveForm.value.from)) / 86400000) + 1)
 })
 
-const paidPercent = computed(() =>
-  Math.round((salary.value.paid / salary.value.total) * 100)
-)
-
-function formatMoney(n) {
-  if (n >= 1000000) return (n / 1000000).toFixed(0) + ' mln'
-  return n.toLocaleString()
+async function submitLeaveForm() {
+  if (!leaveForm.value.employee || !leaveForm.value.from || !leaveForm.value.to) return
+  try {
+    await api.createLeave({ user_id:leaveForm.value.employee, type:leaveForm.value.type, start_date:leaveForm.value.from, end_date:leaveForm.value.to, reason:leaveForm.value.reason||null, status:'pending' })
+    modalSuccess.value = true
+    setTimeout(() => closeModal(), 1600)
+    leaveForm.value = { employee:'', type:'annual', from:'', to:'', reason:'' }
+    const r = await api.getLeaves(); allLeaves.value = r?.data || []
+  } catch(e) { alert(e.message) }
 }
 
-// ─── Upcoming Birthdays & Anniversaries ───
-const upcomingEvents = ref([
-  { name: 'Nilufar Rahimova', initials: 'NR', color: '#059669', type: 'birthday',     label: "Tug'ilgan kun",  date: '8-mart',  icon: CakeSlice   },
-  { name: 'Jasur Mirzayev',   initials: 'JM', color: '#7c3aed', type: 'anniversary',  label: '3 yillik yubiley', date: '10-mart', icon: PartyPopper },
-  { name: 'Alisher Nazarov',  initials: 'AN', color: '#0891b2', type: 'birthday',     label: "Tug'ilgan kun",  date: '12-mart', icon: CakeSlice   },
-  { name: 'Kamola Ergasheva', initials: 'KE', color: '#ec4899', type: 'anniversary',  label: '1 yillik yubiley', date: '15-mart', icon: PartyPopper },
-])
+// ─── Modal: Hisobot ──────────────────────────────────────────
+const report = ref({ type:'attend', period:new Date().toISOString().slice(0,7), department:'all', format:'pdf' })
+const reportTypes = [
+  { val:'attend', label:'Davomat hisoboti',     icon:'📋' },
+  { val:'salary', label:'Maosh hisoboti',        icon:'💰' },
+  { val:'perf',   label:'Samaradorlik hisoboti', icon:'📊' },
+  { val:'all',    label:'Umumiy hisobot',        icon:'📁' },
+]
 
-// ─── Department headcount ───
-const departments = ref([
-  { name: 'Development', count: 12, total: 42, color: '#7c3aed' },
-  { name: 'Design',      count:  7, total: 42, color: '#ec4899' },
-  { name: 'QA',          count:  8, total: 42, color: '#059669' },
-  { name: 'Management',  count:  6, total: 42, color: '#f59e0b' },
-  { name: 'DevOps',      count:  5, total: 42, color: '#06b6d4' },
-  { name: 'Other',       count:  4, total: 42, color: '#9ca3af' },
-])
-
-const attendanceRate = computed(() => Math.round((31 / 42) * 100))
-
-const today = new Date().toLocaleDateString('uz-UZ', {
-  weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-})
+// ─── today label ─────────────────────────────────────────────
+const today = new Date().toLocaleDateString('uz-UZ', { weekday:'long', year:'numeric', month:'long', day:'numeric' })
 </script>
 
 <template>
@@ -476,7 +504,7 @@ const today = new Date().toLocaleDateString('uz-UZ', {
         <div class="card-head">
           <div>
             <h3 class="card-title">Bugungi holat</h3>
-            <p class="card-sub">Jami 42 xodimdan</p>
+            <p class="card-sub">Jami {{ totalEmp }} xodimdan</p>
           </div>
         </div>
         <div class="donut-wrap">
@@ -487,12 +515,7 @@ const today = new Date().toLocaleDateString('uz-UZ', {
           </div>
         </div>
         <div class="donut-stats">
-          <div v-for="item in [
-            { label:'Kelgan', val:31, color:'#7c3aed' },
-            { label:'Kelmagan', val:5, color:'#ef4444' },
-            { label:'Kech qolgan', val:3, color:'#f59e0b' },
-            { label:'Sababli', val:3, color:'#06b6d4' }
-          ]" :key="item.label" class="d-stat">
+          <div v-for="item in donutStats" :key="item.label" class="d-stat">
             <span class="d-dot" :style="{ background: item.color }"></span>
             <span class="d-key">{{ item.label }}</span>
             <span class="d-val">{{ item.val }}</span>
@@ -560,7 +583,7 @@ const today = new Date().toLocaleDateString('uz-UZ', {
         <div class="dept-summary">
           <div class="dept-sum-row" v-for="d in departments" :key="d.name + '_s'">
             <span class="sum-dot" :style="{ background: d.color }"></span>
-            <span class="sum-pct">{{ Math.round((d.count / 42) * 100) }}%</span>
+            <span class="sum-pct">{{ Math.round((d.count / (d.total || 1)) * 100) }}%</span>
           </div>
         </div>
       </div>
@@ -577,7 +600,7 @@ const today = new Date().toLocaleDateString('uz-UZ', {
           <div>
             <h3 class="card-title">Ta'til so'rovlari</h3>
             <p class="card-sub">
-              <span class="pending-count">{{ leaveRequests.filter(r => r.status === 'pending').length }}</span>
+              <span class="pending-count">{{ pendingLeaveCnt }}</span>
               ta ko'rib chiqilmoqda
             </p>
           </div>

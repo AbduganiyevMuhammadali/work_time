@@ -1,6 +1,13 @@
 <template>
   <div class="leave-page">
 
+    <!-- ── TOAST ─────────────────────────────────────────────── -->
+    <Teleport to="body">
+      <Transition name="toast-fade">
+        <div v-if="toast.show" class="toast" :class="toast.type">{{ toast.msg }}</div>
+      </Transition>
+    </Teleport>
+
     <!-- ── STAT CARDS ───────────────────────────────────────── -->
     <div class="stats-grid">
       <div class="stat-card" style="--ca:#d97706;--ca-bg:#fef3c7">
@@ -41,7 +48,6 @@
           <span class="card-sub">Xodimlarning ta'til va ruxsat so'rovlari</span>
         </div>
         <div class="head-controls">
-
           <div class="search-box">
             <Search :size="14" class="s-icon" />
             <input v-model="search" placeholder="Xodim yoki tur..." />
@@ -85,7 +91,22 @@
           </thead>
           <tbody>
 
-            <template v-if="filtered.length === 0">
+            <!-- Skeleton -->
+            <template v-if="loading">
+              <tr v-for="n in 5" :key="'sk'+n" class="sk-row">
+                <td><div class="sk-emp"><div class="sk-av"></div><div class="sk-lines"><div class="sk"></div><div class="sk sk-sm"></div></div></div></td>
+                <td><div class="sk sk-badge"></div></td>
+                <td><div class="sk sk-date"></div></td>
+                <td><div class="sk sk-date"></div></td>
+                <td><div class="sk sk-chip"></div></td>
+                <td><div class="sk sk-reason"></div></td>
+                <td><div class="sk sk-badge"></div></td>
+                <td><div class="sk-acts"><div class="sk sk-act"></div><div class="sk sk-act"></div><div class="sk sk-act"></div></div></td>
+              </tr>
+            </template>
+
+            <!-- Empty -->
+            <template v-else-if="filtered.length === 0">
               <tr>
                 <td colspan="8" class="empty-cell">
                   <CalendarOff :size="36" class="empty-icon" />
@@ -94,10 +115,10 @@
               </tr>
             </template>
 
+            <!-- Data -->
             <template v-else>
               <tr v-for="req in filtered" :key="req.id">
 
-                <!-- Xodim -->
                 <td>
                   <div class="emp-cell">
                     <div class="av" :style="{ background: req.color + '22', color: req.color }">
@@ -110,62 +131,47 @@
                   </div>
                 </td>
 
-                <!-- Tur -->
                 <td>
                   <span class="type-badge" :class="req.type">{{ TYPE_LBL[req.type] }}</span>
                 </td>
 
-                <!-- Boshlanish -->
-                <td class="date-cell">{{ formatDate(req.startDate) }}</td>
+                <td class="date-cell">{{ formatDate(req.start_date) }}</td>
+                <td class="date-cell">{{ formatDate(req.end_date) }}</td>
 
-                <!-- Tugash -->
-                <td class="date-cell">{{ formatDate(req.endDate) }}</td>
-
-                <!-- Kunlar -->
                 <td>
-                  <span class="days-chip">{{ calcDays(req.startDate, req.endDate) }} kun</span>
+                  <span class="days-chip">{{ calcDays(req.start_date, req.end_date) }} kun</span>
                 </td>
 
-                <!-- Sabab -->
                 <td class="reason-cell">{{ req.reason || '—' }}</td>
 
-                <!-- Holat -->
                 <td>
                   <span :class="['s-badge', req.status]">{{ STATUS_LBL[req.status] }}</span>
                 </td>
 
-                <!-- Amallar -->
                 <td class="act-cell">
                   <button
                     v-if="req.status === 'pending'"
                     class="act-btn approve-btn"
                     title="Tasdiqlash"
-                    @click="changeStatus(req.id, 'approved')"
-                  >
-                    <Check :size="13" />
-                  </button>
+                    :disabled="saving === req.id"
+                    @click="changeStatus(req, 'approved')"
+                  ><Check :size="13" /></button>
                   <button
                     v-if="req.status === 'pending'"
                     class="act-btn reject-btn"
                     title="Rad etish"
-                    @click="changeStatus(req.id, 'rejected')"
-                  >
-                    <X :size="13" />
-                  </button>
+                    :disabled="saving === req.id"
+                    @click="changeStatus(req, 'rejected')"
+                  ><X :size="13" /></button>
                   <button
                     v-if="req.status !== 'pending'"
                     class="act-btn reset-btn"
                     title="Qayta ko'rish"
-                    @click="changeStatus(req.id, 'pending')"
-                  >
-                    <RotateCcw :size="13" />
-                  </button>
-                  <button class="act-btn edit-btn" title="Tahrirlash" @click="openModal(req)">
-                    <Pencil :size="13" />
-                  </button>
-                  <button class="act-btn del-btn" title="O'chirish" @click="removeReq(req.id)">
-                    <Trash2 :size="13" />
-                  </button>
+                    :disabled="saving === req.id"
+                    @click="changeStatus(req, 'pending')"
+                  ><RotateCcw :size="13" /></button>
+                  <button class="act-btn edit-btn" title="Tahrirlash" @click="openModal(req)"><Pencil :size="13" /></button>
+                  <button class="act-btn del-btn" title="O'chirish" :disabled="saving === req.id" @click="removeReq(req)"><Trash2 :size="13" /></button>
                 </td>
 
               </tr>
@@ -193,15 +199,61 @@
 
         <form class="modal-form" @submit.prevent="saveReq">
 
-          <!-- Xodim -->
           <div class="form-row">
+            <!-- ── Xodim: custom searchable dropdown ── -->
             <div class="form-group">
               <label>Xodim <span class="req">*</span></label>
-              <select v-model="form.employeeId" required @change="onEmpChange">
-                <option value="" disabled>Xodim tanlang</option>
-                <option v-for="e in EMPLOYEES" :key="e.id" :value="e.id">{{ e.name }}</option>
-              </select>
+              <div class="emp-select-wrap" ref="empDropRef">
+                <div class="emp-select" :class="{ open: empDropOpen, filled: !!selectedEmp }" @click="toggleEmpDrop">
+                  <template v-if="selectedEmp">
+                    <div class="es-av" :style="{ background: selectedEmp.color+'22', color: selectedEmp.color }">
+                      {{ initials(selectedEmp.fullname) }}
+                    </div>
+                    <div class="es-info">
+                      <span class="es-name">{{ selectedEmp.fullname }}</span>
+                      <span class="es-dept">{{ selectedEmp.department || '' }}</span>
+                    </div>
+                  </template>
+                  <span v-else class="es-placeholder">Xodim tanlang...</span>
+                  <svg class="es-chevron" :class="{ rotated: empDropOpen }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                </div>
+
+                <div v-if="empDropOpen" class="emp-drop">
+                  <div class="emp-drop-search">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input ref="empSearchInput" v-model="empSearch" placeholder="Qidirish..." @click.stop />
+                  </div>
+                  <div class="emp-drop-list">
+                    <template v-if="employees.length === 0">
+                      <div class="emp-empty">Xodimlar topilmadi (server qayta ishga tushiring)</div>
+                    </template>
+                    <template v-else>
+                      <div
+                        v-for="e in filteredEmployees"
+                        :key="e.id"
+                        class="emp-opt"
+                        :class="{ active: form.user_id === e.id }"
+                        @click.stop="selectEmp(e)"
+                      >
+                        <div class="eo-av" :style="{ background: (e.color||'#7c3aed')+'22', color: e.color||'#7c3aed' }">
+                          {{ initials(e.fullname) }}
+                        </div>
+                        <div class="eo-info">
+                          <span class="eo-name">{{ e.fullname }}</span>
+                          <span class="eo-dept">{{ e.department || '' }}</span>
+                        </div>
+                        <svg v-if="form.user_id === e.id" class="eo-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                      </div>
+                      <div v-if="filteredEmployees.length === 0" class="emp-empty">Topilmadi</div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+
+              <!-- hidden required field -->
+              <input type="text" :value="form.user_id" required style="position:absolute;opacity:0;width:0;height:0;pointer-events:none" tabindex="-1" />
             </div>
+
             <div class="form-group">
               <label>Ta'til turi <span class="req">*</span></label>
               <select v-model="form.type" required>
@@ -214,31 +266,27 @@
             </div>
           </div>
 
-          <!-- Sanalar -->
           <div class="form-row">
             <div class="form-group">
               <label>Boshlanish sanasi <span class="req">*</span></label>
-              <input type="date" v-model="form.startDate" required />
+              <input type="date" v-model="form.start_date" required />
             </div>
             <div class="form-group">
               <label>Tugash sanasi <span class="req">*</span></label>
-              <input type="date" v-model="form.endDate" required />
+              <input type="date" v-model="form.end_date" required />
             </div>
           </div>
 
-          <!-- Kun hisob -->
-          <div v-if="form.startDate && form.endDate" class="days-info">
+          <div v-if="form.start_date && form.end_date" class="days-info">
             <CalendarOff :size="14" />
-            <span>Jami: <strong>{{ calcDays(form.startDate, form.endDate) }} ish kuni</strong></span>
+            <span>Jami: <strong>{{ calcDays(form.start_date, form.end_date) }} ish kuni</strong></span>
           </div>
 
-          <!-- Sabab -->
           <div class="form-group">
             <label>Sabab</label>
             <textarea v-model="form.reason" placeholder="Ta'til sababini kiriting..." rows="3"></textarea>
           </div>
 
-          <!-- Holat (admin uchun) -->
           <div class="form-group">
             <label>Holat</label>
             <select v-model="form.status">
@@ -250,7 +298,7 @@
 
           <div class="modal-actions">
             <button type="button" class="cancel-btn" @click="modalOpen = false">Bekor qilish</button>
-            <button type="submit" class="save-btn">
+            <button type="submit" class="save-btn" :disabled="formSaving">
               <Check :size="14" /> {{ editing ? 'Saqlash' : "Qo'shish" }}
             </button>
           </div>
@@ -263,62 +311,129 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import {
   Search, Plus, Check, X, Pencil, Trash2, RotateCcw,
   Clock, CheckCircle2, XCircle, CalendarOff
 } from 'lucide-vue-next'
+import { api } from '@/api/api.js'
 
 // ─── Constants ───────────────────────────────────────────────
 const STATUS_LBL = { pending: 'Kutilmoqda', approved: 'Tasdiqlangan', rejected: 'Rad etilgan' }
 const TYPE_LBL   = { annual: 'Yillik', sick: 'Kasallik', unpaid: 'Haqsiz', maternity: "Tug'ruq", other: 'Boshqa' }
 
-const EMPLOYEES = [
-  { id: 1, name: 'Alisher Karimov',   department: 'IT',     color: '#7c3aed' },
-  { id: 2, name: 'Malika Yusupova',   department: 'Design', color: '#059669' },
-  { id: 3, name: "Jamshid To'xtaev",  department: 'HR',     color: '#2563eb' },
-  { id: 4, name: 'Nodira Ergasheva',  department: 'Moliya', color: '#d97706' },
-  { id: 5, name: 'Sardor Nazarov',    department: 'Savdo',  color: '#dc2626' },
-  { id: 6, name: 'Zulfiya Xoliqova',  department: 'IT',     color: '#0891b2' },
-]
-
 // ─── State ───────────────────────────────────────────────────
+const requests     = ref([])
+const employees    = ref([])
+const loading      = ref(false)
+const saving       = ref(null)   // id of row being saved
+const formSaving   = ref(false)
 const search       = ref('')
 const filterStatus = ref('')
 const filterType   = ref('')
 const modalOpen    = ref(false)
 const editing      = ref(null)
+const toast        = ref({ show: false, msg: '', type: 'success' })
+
+// ─── Emp dropdown ─────────────────────────────────────────────
+const empDropRef    = ref(null)
+const empSearchInput = ref(null)
+const empDropOpen   = ref(false)
+const empSearch     = ref('')
+const selectedEmp   = computed(() => employees.value.find(e => e.id === form.value.user_id) || null)
+const filteredEmployees = computed(() => {
+  const q = empSearch.value.toLowerCase()
+  return q ? employees.value.filter(e => e.fullname.toLowerCase().includes(q) || (e.department||'').toLowerCase().includes(q)) : employees.value
+})
+
+function toggleEmpDrop() {
+  empDropOpen.value = !empDropOpen.value
+  if (empDropOpen.value) {
+    empSearch.value = ''
+    nextTick(() => empSearchInput.value?.focus())
+  }
+}
+
+function selectEmp(e) {
+  form.value.user_id = e.id
+  empDropOpen.value  = false
+  empSearch.value    = ''
+}
+
+function onDocClick(ev) {
+  if (empDropRef.value && !empDropRef.value.contains(ev.target)) {
+    empDropOpen.value = false
+  }
+}
+
+onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 
 const defaultForm = () => ({
-  employeeId: '', employeeName: '', department: '', color: '',
-  type: 'annual', startDate: '', endDate: '',
+  user_id: '', type: 'annual', start_date: '', end_date: '',
   reason: '', status: 'pending',
 })
 const form = ref(defaultForm())
 
-const requests = ref([
-  { id: 1, employeeId: 5, employeeName: 'Sardor Nazarov',   department: 'Savdo',  color: '#dc2626', type: 'annual',   startDate: '2026-03-10', endDate: '2026-03-21', reason: 'Yillik ta\'til',       status: 'approved' },
-  { id: 2, employeeId: 4, employeeName: 'Nodira Ergasheva', department: 'Moliya', color: '#d97706', type: 'sick',     startDate: '2026-03-05', endDate: '2026-03-07', reason: 'Grippe',               status: 'approved' },
-  { id: 3, employeeId: 3, employeeName: "Jamshid To'xtaev", department: 'HR',     color: '#2563eb', type: 'annual',   startDate: '2026-03-15', endDate: '2026-03-20', reason: "Oilaviy tadbirlar",    status: 'pending'  },
-  { id: 4, employeeId: 2, employeeName: 'Malika Yusupova',  department: 'Design', color: '#059669', type: 'unpaid',   startDate: '2026-03-08', endDate: '2026-03-09', reason: "Shaxsiy ish",          status: 'pending'  },
-  { id: 5, employeeId: 1, employeeName: 'Alisher Karimov',  department: 'IT',     color: '#7c3aed', type: 'sick',     startDate: '2026-02-20', endDate: '2026-02-22', reason: 'Shamollash',           status: 'rejected' },
-  { id: 6, employeeId: 6, employeeName: 'Zulfiya Xoliqova', department: 'IT',     color: '#0891b2', type: 'annual',   startDate: '2026-04-01', endDate: '2026-04-14', reason: "Yillik dam olish",     status: 'pending'  },
-])
+// ─── Toast ────────────────────────────────────────────────────
+let toastTimer = null
+function showToast(msg, type = 'success') {
+  clearTimeout(toastTimer)
+  toast.value = { show: true, msg, type }
+  toastTimer = setTimeout(() => { toast.value.show = false }, 3000)
+}
+
+// ─── Load data ────────────────────────────────────────────────
+async function load() {
+  loading.value = true
+  const [leavesRes, usersRes] = await Promise.allSettled([
+    api.getLeaves(),
+    api.getUsers(),
+  ])
+  if (leavesRes.status === 'fulfilled') {
+    requests.value = leavesRes.value?.data || []
+  } else {
+    console.warn('[tatil] getLeaves xato:', leavesRes.reason)
+    showToast('Ta\'tillar yuklanmadi: ' + (leavesRes.reason?.message || 'xatolik'), 'error')
+  }
+
+  if (usersRes.status === 'fulfilled') {
+    const list = usersRes.value
+    employees.value = Array.isArray(list) ? list : []
+    console.log('[tatil] xodimlar:', employees.value.length, employees.value.map(e => e.fullname))
+  } else {
+    console.warn('[tatil] getUsers xato:', usersRes.reason)
+    showToast('Xodimlar yuklanmadi: ' + (usersRes.reason?.message || 'xatolik'), 'error')
+  }
+
+  loading.value = false
+}
+
+onMounted(() => {
+  load()
+  document.addEventListener('click', onDocClick)
+})
 
 // ─── Computed ─────────────────────────────────────────────────
 const filtered = computed(() => {
   let list = requests.value
-  if (search.value)       list = list.filter(r => r.employeeName.toLowerCase().includes(search.value.toLowerCase()) || TYPE_LBL[r.type].toLowerCase().includes(search.value.toLowerCase()))
+  if (search.value)       list = list.filter(r =>
+    r.employeeName.toLowerCase().includes(search.value.toLowerCase()) ||
+    TYPE_LBL[r.type].toLowerCase().includes(search.value.toLowerCase())
+  )
   if (filterStatus.value) list = list.filter(r => r.status === filterStatus.value)
-  if (filterType.value)   list = list.filter(r => r.type === filterType.value)
+  if (filterType.value)   list = list.filter(r => r.type   === filterType.value)
   return list
 })
 
-const countByStatus = (s)  => requests.value.filter(r => r.status === s).length
-const totalDays     = computed(() => requests.value.filter(r => r.status === 'approved').reduce((sum, r) => sum + calcDays(r.startDate, r.endDate), 0))
+const countByStatus = (s) => requests.value.filter(r => r.status === s).length
+const totalDays = computed(() =>
+  requests.value
+    .filter(r => r.status === 'approved')
+    .reduce((sum, r) => sum + calcDays(r.start_date, r.end_date), 0)
+)
 
 // ─── Helpers ──────────────────────────────────────────────────
-const initials  = (name) => name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
+const initials  = (name) => (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
 const calcDays  = (s, e) => {
   if (!s || !e) return 0
   const diff = (new Date(e) - new Date(s)) / 86400000
@@ -330,41 +445,80 @@ const formatDate = (d) => {
   return `${day}.${m}.${y}`
 }
 
-// ─── Modal ────────────────────────────────────────────────────
-const onEmpChange = () => {
-  const emp = EMPLOYEES.find(e => e.id === form.value.employeeId)
-  if (emp) {
-    form.value.employeeName = emp.name
-    form.value.department   = emp.department
-    form.value.color        = emp.color
+// ─── Status change ────────────────────────────────────────────
+async function changeStatus(req, status) {
+  saving.value = req.id
+  try {
+    await api.updateLeave(req.id, { status })
+    req.status = status
+    showToast(status === 'approved' ? 'Tasdiqlandi' : status === 'rejected' ? 'Rad etildi' : 'Holat yangilandi')
+  } catch (e) {
+    showToast(e.message || 'Xatolik', 'error')
+  } finally {
+    saving.value = null
   }
 }
 
+// ─── Remove ───────────────────────────────────────────────────
+async function removeReq(req) {
+  if (!confirm(`"${req.employeeName}" so'rovini o'chirishni tasdiqlaysizmi?`)) return
+  saving.value = req.id
+  try {
+    await api.deleteLeave(req.id)
+    requests.value = requests.value.filter(r => r.id !== req.id)
+    showToast("So'rov o'chirildi")
+  } catch (e) {
+    showToast(e.message || 'Xatolik', 'error')
+  } finally {
+    saving.value = null
+  }
+}
+
+// ─── Modal ────────────────────────────────────────────────────
 const openModal = (req) => {
+  empDropOpen.value = false
+  empSearch.value   = ''
   editing.value = req
   form.value = req
-    ? { ...req }
+    ? {
+        user_id:    req.user_id,
+        type:       req.type,
+        start_date: req.start_date,
+        end_date:   req.end_date,
+        reason:     req.reason,
+        status:     req.status,
+      }
     : defaultForm()
   modalOpen.value = true
 }
 
-const saveReq = () => {
-  if (editing.value) {
-    const idx = requests.value.findIndex(r => r.id === editing.value.id)
-    if (idx !== -1) requests.value[idx] = { ...form.value }
-  } else {
-    requests.value.push({ ...form.value, id: Date.now() })
+async function saveReq() {
+  formSaving.value = true
+  try {
+    const payload = {
+      user_id:    form.value.user_id,
+      type:       form.value.type,
+      start_date: form.value.start_date,
+      end_date:   form.value.end_date,
+      reason:     form.value.reason || null,
+      status:     form.value.status,
+    }
+
+    if (editing.value) {
+      await api.updateLeave(editing.value.id, payload)
+      showToast('So\'rov yangilandi')
+    } else {
+      await api.createLeave(payload)
+      showToast('So\'rov qo\'shildi')
+    }
+
+    modalOpen.value = false
+    await load()
+  } catch (e) {
+    showToast(e.message || 'Saqlashda xatolik', 'error')
+  } finally {
+    formSaving.value = false
   }
-  modalOpen.value = false
-}
-
-const changeStatus = (id, status) => {
-  const req = requests.value.find(r => r.id === id)
-  if (req) req.status = status
-}
-
-const removeReq = (id) => {
-  requests.value = requests.value.filter(r => r.id !== id)
 }
 </script>
 
@@ -379,6 +533,22 @@ const removeReq = (id) => {
   gap: 20px;
   box-sizing: border-box;
 }
+
+/* ── TOAST ──────────────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 24px; right: 24px;
+  background: #1e293b; color: #fff;
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-size: 13px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+  z-index: 9999;
+  border-left: 4px solid #059669;
+}
+.toast.error  { border-left-color: #dc2626; }
+.toast-fade-enter-active, .toast-fade-leave-active { transition: all 0.25s; }
+.toast-fade-enter-from, .toast-fade-leave-to { opacity: 0; transform: translateY(10px); }
 
 /* ── STAT CARDS ─────────────────────────────────────────────── */
 .stats-grid {
@@ -566,20 +736,21 @@ tbody tr:hover td     { background: var(--surface2); }
   display: flex; align-items: center; justify-content: center;
   transition: all 0.15s;
 }
+.act-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .approve-btn { color: #059669; }
-.approve-btn:hover { background: #d1fae5; border-color: #6ee7b7; }
+.approve-btn:hover:not(:disabled) { background: #d1fae5; border-color: #6ee7b7; }
 .reject-btn  { color: #dc2626; }
-.reject-btn:hover  { background: #fee2e2; border-color: #fca5a5; }
+.reject-btn:hover:not(:disabled)  { background: #fee2e2; border-color: #fca5a5; }
 .reset-btn   { color: #d97706; }
-.reset-btn:hover   { background: #fef3c7; border-color: #fde68a; }
+.reset-btn:hover:not(:disabled)   { background: #fef3c7; border-color: #fde68a; }
 .edit-btn    { color: var(--accent); }
 .edit-btn:hover    { background: var(--accent-bg); border-color: var(--accent-br); }
 .del-btn     { color: #dc2626; }
-.del-btn:hover     { background: #fee2e2; border-color: #fca5a5; }
+.del-btn:hover:not(:disabled)     { background: #fee2e2; border-color: #fca5a5; }
 
-:global(.layout.dark) .approve-btn:hover { background: rgba(5,150,105,0.15);  border-color: rgba(5,150,105,0.3); }
-:global(.layout.dark) .reject-btn:hover  { background: rgba(220,38,38,0.15);  border-color: rgba(220,38,38,0.3); }
-:global(.layout.dark) .del-btn:hover     { background: rgba(220,38,38,0.15);  border-color: rgba(220,38,38,0.3); }
+:global(.layout.dark) .approve-btn:hover:not(:disabled) { background: rgba(5,150,105,0.15);  border-color: rgba(5,150,105,0.3); }
+:global(.layout.dark) .reject-btn:hover:not(:disabled)  { background: rgba(220,38,38,0.15);  border-color: rgba(220,38,38,0.3); }
+:global(.layout.dark) .del-btn:hover:not(:disabled)     { background: rgba(220,38,38,0.15);  border-color: rgba(220,38,38,0.3); }
 
 /* Empty state */
 .empty-cell   { text-align: center; padding: 52px 16px !important; color: var(--t4); }
@@ -592,6 +763,31 @@ tbody tr:hover td     { background: var(--surface2); }
   font-size: 12px;
   color: var(--t4);
 }
+
+/* ── SKELETON ───────────────────────────────────────────────── */
+@keyframes sk-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.sk {
+  height: 12px; border-radius: 6px;
+  background: linear-gradient(90deg, var(--border2) 25%, var(--border) 50%, var(--border2) 75%);
+  background-size: 800px 100%;
+  animation: sk-shimmer 1.4s ease infinite;
+}
+.sk-row td { padding: 14px; }
+.sk-emp { display: flex; align-items: center; gap: 9px; }
+.sk-av  { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+          background: linear-gradient(90deg, var(--border2) 25%, var(--border) 50%, var(--border2) 75%);
+          background-size: 800px 100%; animation: sk-shimmer 1.4s ease infinite; }
+.sk-lines { display: flex; flex-direction: column; gap: 5px; flex: 1; }
+.sk-sm    { width: 60%; }
+.sk-badge  { width: 60px; }
+.sk-date   { width: 72px; }
+.sk-chip   { width: 44px; }
+.sk-reason { width: 90px; }
+.sk-acts   { display: flex; gap: 4px; justify-content: center; }
+.sk-act    { width: 28px; height: 28px; border-radius: 6px; }
 
 /* ── MODAL ──────────────────────────────────────────────────── */
 .modal-backdrop {
@@ -647,6 +843,78 @@ input, select, textarea {
 input:focus, select:focus, textarea:focus { border-color: var(--accent-br); box-shadow: 0 0 0 2px var(--accent-bg); }
 textarea { resize: vertical; min-height: 72px; }
 
+/* ── EMP DROPDOWN ───────────────────────────────────────────── */
+.emp-select-wrap {
+  position: relative;
+}
+.emp-select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--surface2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  transition: border-color 0.15s;
+  user-select: none;
+}
+.emp-select:hover, .emp-select.open { border-color: var(--accent-br); }
+.emp-select.open { box-shadow: 0 0 0 2px var(--accent-bg); }
+.es-av {
+  width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700;
+}
+.es-info { flex: 1; overflow: hidden; }
+.es-name { display: block; font-size: 13px; font-weight: 500; color: var(--t1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.es-dept { display: block; font-size: 11px; color: var(--t4); }
+.es-placeholder { font-size: 13px; color: var(--t4); flex: 1; }
+.es-chevron { margin-left: auto; flex-shrink: 0; color: var(--t3); transition: transform 0.2s; }
+.es-chevron.rotated { transform: rotate(180deg); }
+
+.emp-drop {
+  position: absolute;
+  top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  z-index: 200;
+  overflow: hidden;
+}
+.emp-drop-search {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.emp-drop-search svg { color: var(--t4); flex-shrink: 0; }
+.emp-drop-search input {
+  border: none; outline: none; background: transparent;
+  font-size: 13px; color: var(--t1); width: 100%; padding: 0;
+  box-shadow: none;
+}
+.emp-drop-search input::placeholder { color: var(--t4); }
+.emp-drop-list { max-height: 220px; overflow-y: auto; }
+.emp-opt {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 12px; cursor: pointer;
+  transition: background 0.12s;
+}
+.emp-opt:hover    { background: var(--surface2); }
+.emp-opt.active   { background: var(--accent-bg); }
+.eo-av {
+  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+}
+.eo-info { flex: 1; overflow: hidden; }
+.eo-name { display: block; font-size: 13px; font-weight: 500; color: var(--t1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eo-dept { display: block; font-size: 11px; color: var(--t4); }
+.eo-check { color: var(--accent); flex-shrink: 0; }
+.emp-empty { padding: 16px; text-align: center; font-size: 13px; color: var(--t4); }
+
 .days-info {
   display: flex; align-items: center; gap: 8px;
   background: var(--accent-bg);
@@ -668,7 +936,8 @@ textarea { resize: vertical; min-height: 72px; }
   border: none; border-radius: 8px; padding: 9px 20px;
   font-size: 13px; font-weight: 500; cursor: pointer; transition: opacity 0.15s;
 }
-.save-btn:hover { opacity: 0.88; }
+.save-btn:hover:not(:disabled) { opacity: 0.88; }
+.save-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
 /* ── RESPONSIVE ─────────────────────────────────────────────── */
 @media (max-width: 900px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }

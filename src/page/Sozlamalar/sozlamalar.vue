@@ -316,6 +316,88 @@
           </div>
         </div>
 
+        <!-- ── JARIMALAR ─────────────────────────────────────────── -->
+        <div v-if="activeTab === 'penalties'">
+          <div class="section-head">
+            <AlertTriangle :size="18" />
+            <div>
+              <h3>Kechikish jarimalari</h3>
+              <p>Necha daqiqa kechikishga qancha jarima yoziladi</p>
+            </div>
+          </div>
+
+          <div class="pen-toolbar">
+            <p class="pen-hint">Har bir qator: min_daqiqa – max_daqiqa oralig'idagi kechikish uchun jarima miqdori</p>
+            <button class="save-btn" @click="openNew">
+              <Plus :size="14" /> Qo'shish
+            </button>
+          </div>
+
+          <!-- Xatolik -->
+          <p v-if="penError" class="pen-error">{{ penError }}</p>
+
+          <!-- Form (qo'shish / tahrirlash) -->
+          <div v-if="showForm" class="pen-form">
+            <div class="pen-form-row">
+              <div class="form-group">
+                <label>Dan (daqiqa)</label>
+                <input type="number" v-model="penForm.min_time" min="0" placeholder="1" />
+              </div>
+              <div class="form-group">
+                <label>Gacha (daqiqa)</label>
+                <input type="number" v-model="penForm.max_time" min="0" placeholder="15" />
+              </div>
+              <div class="form-group">
+                <label>Jarima (so'm)</label>
+                <input type="number" v-model="penForm.summa" min="0" placeholder="50000" />
+              </div>
+            </div>
+            <div class="pen-form-actions">
+              <button class="save-btn" @click="savePenalty">
+                <Save :size="14" /> {{ editingId ? 'Saqlash' : 'Qo\'shish' }}
+              </button>
+              <button class="cancel-btn" @click="cancelForm">
+                <X :size="14" /> Bekor
+              </button>
+            </div>
+          </div>
+
+          <!-- Jadval -->
+          <div class="pen-table-wrap">
+            <div v-if="penLoading" class="pen-loading">Yuklanmoqda…</div>
+            <table v-else class="pen-table">
+              <thead>
+                <tr>
+                  <th>№</th>
+                  <th>Dan (daq)</th>
+                  <th>Gacha (daq)</th>
+                  <th>Jarima (so'm)</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="penalties.length === 0">
+                  <td colspan="5" class="pen-empty">Jarima qatorlari yo'q</td>
+                </tr>
+                <tr v-for="(row, i) in penalties" :key="row.id">
+                  <td class="pen-num">{{ i + 1 }}</td>
+                  <td>{{ row.min_time }} daq</td>
+                  <td>{{ row.max_time }} daq</td>
+                  <td class="pen-summa">{{ Number(row.summa).toLocaleString() }} so'm</td>
+                  <td class="pen-actions">
+                    <button class="pen-edit-btn" @click="openEdit(row)" title="Tahrirlash">
+                      <Pencil :size="13" />
+                    </button>
+                    <button class="pen-del-btn" @click="deletePenalty(row.id)" title="O'chirish">
+                      <Trash2 :size="13" />
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <!-- ── Saved toast ───────────────────────────────────────── -->
         <Transition name="toast">
           <div v-if="savedMsg" class="saved-toast">
@@ -329,19 +411,21 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import {
   Building2, Clock, Bell, BadgeDollarSign, UserCircle,
-  Save, CheckCircle2
+  Save, CheckCircle2, AlertTriangle, Plus, Trash2, Pencil, X
 } from 'lucide-vue-next'
+import { api } from '@/api/api.js'
 
 // ─── Tabs ─────────────────────────────────────────────────────
 const tabs = [
-  { key: 'company',   label: 'Kompaniya',        icon: Building2          },
-  { key: 'workhours', label: 'Ish vaqti',         icon: Clock              },
-  { key: 'salary',    label: 'Maosh sozlamalari', icon: BadgeDollarSign    },
-  { key: 'notif',     label: 'Bildirishnomalar',  icon: Bell               },
-  { key: 'profile',   label: 'Profilim',          icon: UserCircle         },
+  { key: 'company',   label: 'Kompaniya',        icon: Building2       },
+  { key: 'workhours', label: 'Ish vaqti',         icon: Clock           },
+  { key: 'salary',    label: 'Maosh sozlamalari', icon: BadgeDollarSign },
+  { key: 'penalties', label: 'Jarimalar',         icon: AlertTriangle   },
+  { key: 'notif',     label: 'Bildirishnomalar',  icon: Bell            },
+  { key: 'profile',   label: 'Profilim',          icon: UserCircle      },
 ]
 const activeTab = ref('company')
 
@@ -399,7 +483,7 @@ const profile = ref({
 const savedMsg = ref(false)
 let   saveTimer = null
 
-const saved = (tab) => {
+const saved = () => {
   savedMsg.value = true
   clearTimeout(saveTimer)
   saveTimer = setTimeout(() => { savedMsg.value = false }, 2500)
@@ -410,6 +494,76 @@ const toggleWorkDay = (i) => {
   if (idx === -1) workHours.value.workDays.push(i)
   else workHours.value.workDays.splice(idx, 1)
 }
+
+// ─── Jarimalar (penalties_and_bonus) ──────────────────────────
+const penalties   = ref([])
+const penLoading  = ref(false)
+const penError    = ref('')
+
+// Form: qo'shish / tahrirlash
+const penForm     = ref({ min_time: '', max_time: '', summa: '' })
+const editingId   = ref(null)   // null = yangi qo'shish, number = tahrirlash
+const showForm    = ref(false)
+
+const loadPenalties = async () => {
+  penLoading.value = true
+  penError.value   = ''
+  try {
+    penalties.value = await api.getPenalties()
+  } catch (e) {
+    penError.value = e.message
+  } finally {
+    penLoading.value = false
+  }
+}
+
+const openNew = () => {
+  editingId.value = null
+  penForm.value   = { min_time: '', max_time: '', summa: '' }
+  showForm.value  = true
+}
+
+const openEdit = (row) => {
+  editingId.value = row.id
+  penForm.value   = { min_time: row.min_time, max_time: row.max_time, summa: row.summa }
+  showForm.value  = true
+}
+
+const cancelForm = () => { showForm.value = false }
+
+const savePenalty = async () => {
+  const { min_time, max_time, summa } = penForm.value
+  if (min_time === '' || max_time === '' || summa === '') return
+  try {
+    const data = {
+      min_time: Number(min_time),
+      max_time: Number(max_time),
+      summa:    Number(summa),
+    }
+    if (editingId.value) {
+      await api.updatePenalty(editingId.value, data)
+    } else {
+      await api.createPenalty(data)
+    }
+    showForm.value = false
+    await loadPenalties()
+    saved()
+  } catch (e) {
+    penError.value = e.message
+  }
+}
+
+const deletePenalty = async (id) => {
+  if (!confirm('Bu jarima qatorini o\'chirasizmi?')) return
+  try {
+    await api.deletePenalty(id)
+    await loadPenalties()
+  } catch (e) {
+    penError.value = e.message
+  }
+}
+
+onMounted(loadPenalties)
 </script>
 
 <style scoped>
@@ -600,6 +754,76 @@ input:focus, select:focus {
 }
 .toast-enter-active, .toast-leave-active { transition: all 0.25s ease; }
 .toast-enter-from, .toast-leave-to       { opacity: 0; transform: translateY(8px); }
+
+/* ── PENALTIES TAB ──────────────────────────────────────────── */
+.pen-toolbar {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 14px; gap: 12px; flex-wrap: wrap;
+}
+.pen-hint {
+  margin: 0; font-size: 12px; color: var(--t4); flex: 1;
+}
+.pen-error {
+  color: #dc2626; font-size: 13px; margin-bottom: 10px;
+}
+
+.pen-form {
+  background: var(--surface2);
+  border: 1px solid var(--accent-br);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.pen-form-row {
+  display: flex; gap: 12px; flex-wrap: wrap;
+}
+.pen-form-row .form-group { flex: 1; min-width: 100px; }
+.pen-form-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+}
+.cancel-btn {
+  display: flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); background: var(--surface);
+  border-radius: 8px; padding: 9px 16px;
+  font-size: 13px; font-weight: 500; color: var(--t3);
+  cursor: pointer; transition: all 0.15s;
+}
+.cancel-btn:hover { background: var(--surface2); color: var(--t1); }
+
+.pen-table-wrap { overflow-x: auto; border-radius: 10px; border: 1px solid var(--border); }
+.pen-table {
+  width: 100%; border-collapse: collapse; text-align: left;
+}
+.pen-table th {
+  background: var(--surface2);
+  padding: 9px 14px;
+  font-size: 11px; font-weight: 700;
+  color: var(--t4); text-transform: uppercase; letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+}
+.pen-table td {
+  padding: 10px 14px;
+  font-size: 13px; color: var(--t2);
+  border-bottom: 1px solid var(--border2);
+}
+.pen-table tbody tr:last-child td { border-bottom: none; }
+.pen-table tbody tr:hover { background: var(--surface2); }
+.pen-num   { color: var(--t5); font-weight: 600; width: 40px; }
+.pen-summa { font-weight: 700; color: #dc2626; }
+.pen-empty { text-align: center; color: var(--t4); padding: 24px; }
+.pen-loading { text-align: center; color: var(--t4); padding: 20px; font-size: 13px; }
+.pen-actions { display: flex; gap: 6px; }
+.pen-edit-btn, .pen-del-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 7px;
+  border: 1px solid var(--border); background: none; cursor: pointer;
+  transition: all 0.15s;
+}
+.pen-edit-btn { color: var(--accent); }
+.pen-edit-btn:hover { background: var(--accent-bg); border-color: var(--accent-br); }
+.pen-del-btn  { color: #dc2626; }
+.pen-del-btn:hover  { background: #fee2e2; border-color: #dc2626; }
 
 /* ── RESPONSIVE ─────────────────────────────────────────────── */
 @media (max-width: 700px) {

@@ -1,50 +1,53 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import {
-  Users, UserCheck, Clock, UserX,
+  Users, UserCheck, UserX,
   Search, RefreshCw, CalendarDays,
   CheckCircle2, AlertCircle, XCircle,
-  ChevronDown, Download
+  AlertTriangle, Clock
 } from 'lucide-vue-next'
+import { api } from '@/api/api.js'
 
-const today = new Date().toISOString().split('T')[0]
+// ── State ─────────────────────────────────────────────────
+const today        = new Date().toISOString().split('T')[0]
 const selectedDate = ref(today)
-const searchQuery   = ref('')
-const loading       = ref(false)
-const activeFilter  = ref('all')
+const searchQuery  = ref('')
+const loading      = ref(false)
+const error        = ref('')
+const activeFilter = ref('all')
+const employees    = ref([])
 
-const formattedDate = computed(() => {
-  const d = new Date(selectedDate.value)
-  return d.toLocaleDateString('uz-UZ', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-})
-
-const initials = name => name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
-
-const employees = ref([
-  { id:  1, name: "O'rinboyev I.I",   role: 'Rentgent',          color: '#7c3aed', arrival: '08:00', departure: '17:00', status: 'on-time', phone: '+998 90 200 20 20' },
-  { id:  2, name: 'Tashaliyev D.Q',   role: 'Laborant',           color: '#059669', arrival: '08:00', departure: '16:00', status: 'on-time', phone: '+998 90 201 21 21' },
-  { id:  3, name: 'Mirzayeva Umida',  role: 'Laborant',           color: '#2563eb', arrival: '08:45', departure: '17:00', status: 'late',    phone: '+998 90 202 22 22' },
-  { id:  4, name: 'Hoshinova Odina',  role: 'Hamshira',           color: '#d97706', arrival: '08:00', departure: '16:00', status: 'on-time', phone: '+998 90 203 23 23' },
-  { id:  5, name: 'Karimov Bobur',    role: 'Shifokor',           color: '#dc2626', arrival: null,    departure: null,    status: 'absent',  phone: '+998 90 300 10 10' },
-  { id:  6, name: 'Nazarova Malika',  role: 'UI/UX Designer',     color: '#ec4899', arrival: '07:55', departure: '17:10', status: 'on-time', phone: '+998 91 100 11 11' },
-  { id:  7, name: 'Toshmatov Bobur',  role: 'Backend Developer',  color: '#6366f1', arrival: '09:22', departure: '18:00', status: 'late',    phone: '+998 91 200 22 22' },
-  { id:  8, name: 'Rahimova Nilufar', role: 'QA Engineer',        color: '#059669', arrival: '08:10', departure: '17:00', status: 'on-time', phone: '+998 91 300 33 33' },
-  { id:  9, name: 'Mirzayev Jasur',   role: 'DevOps Engineer',    color: '#06b6d4', arrival: '08:30', departure: '17:30', status: 'on-time', phone: '+998 93 400 44 44' },
-  { id: 10, name: 'Hasanova Dilorom', role: 'Project Manager',    color: '#f59e0b', arrival: '09:15', departure: '18:00', status: 'late',    phone: '+998 93 500 55 55' },
-])
-
+// ── Config ────────────────────────────────────────────────
 const statusCfg = {
-  'on-time': { label: "O'z vaqtida", color: '#059669', bg: '#d1fae5', bgDark: 'rgba(5,150,105,0.15)',  icon: CheckCircle2 },
-  'late':    { label: 'Kech keldi',  color: '#dc2626', bg: '#fee2e2', bgDark: 'rgba(220,38,38,0.15)',   icon: AlertCircle  },
-  'absent':  { label: 'Kelmadi',     color: '#d97706', bg: '#fef3c7', bgDark: 'rgba(217,119,6,0.15)',   icon: XCircle      },
+  'on-time': { label: "O'z vaqtida", color: '#059669', bg: '#d1fae5', icon: CheckCircle2 },
+  'late':    { label: 'Kech keldi',  color: '#dc2626', bg: '#fee2e2', icon: AlertCircle  },
+  'absent':  { label: 'Kelmadi',     color: '#d97706', bg: '#fef3c7', icon: XCircle      },
 }
 
 const filterTabs = [
-  { key: 'all',     label: 'Hammasi' },
+  { key: 'all',     label: 'Hammasi'    },
   { key: 'on-time', label: "O'z vaqtida" },
   { key: 'late',    label: 'Kech keldi' },
-  { key: 'absent',  label: 'Kelmadi' },
+  { key: 'absent',  label: 'Kelmadi'   },
 ]
+
+// ── Helpers ───────────────────────────────────────────────
+const initials = name =>
+  (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
+
+const formattedDate = computed(() =>
+  new Date(selectedDate.value).toLocaleDateString('uz-UZ', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  })
+)
+
+// ── Stats ─────────────────────────────────────────────────
+const stats = computed(() => ({
+  total:  employees.value.length,
+  onTime: employees.value.filter(e => e.status === 'on-time').length,
+  late:   employees.value.filter(e => e.status === 'late').length,
+  absent: employees.value.filter(e => e.status === 'absent').length,
+}))
 
 const statCards = computed(() => [
   { key: 'all',     label: 'Jami',    value: stats.value.total,  accent: '#7c3aed', accentBg: 'rgba(124,58,237,0.1)',  icon: Users     },
@@ -53,56 +56,66 @@ const statCards = computed(() => [
   { key: 'absent',  label: 'Kelmadi', value: stats.value.absent, accent: '#d97706', accentBg: 'rgba(217,119,6,0.1)',   icon: UserX     },
 ])
 
-const stats = computed(() => ({
-  total:  employees.value.length,
-  onTime: employees.value.filter(e => e.status === 'on-time').length,
-  late:   employees.value.filter(e => e.status === 'late').length,
-  absent: employees.value.filter(e => e.status === 'absent').length,
-}))
-
-const attendanceRate = computed(() =>
-  Math.round((stats.value.onTime / stats.value.total) * 100)
-)
+const attendanceRate = computed(() => {
+  const t = stats.value.total
+  return t ? Math.round(((stats.value.onTime + stats.value.late) / t) * 100) : 0
+})
 
 const filteredEmployees = computed(() => {
   let list = employees.value
   const q = searchQuery.value.toLowerCase().trim()
-  if (q) list = list.filter(e => e.name.toLowerCase().includes(q) || e.role.toLowerCase().includes(q))
-  if (activeFilter.value !== 'all') list = list.filter(e => e.status === activeFilter.value)
+  if (q) list = list.filter(e =>
+    e.name.toLowerCase().includes(q) ||
+    (e.position || '').toLowerCase().includes(q)
+  )
+  if (activeFilter.value !== 'all')
+    list = list.filter(e => e.status === activeFilter.value)
   return list
 })
 
-const setToday = () => { selectedDate.value = today }
-
+// ── API ───────────────────────────────────────────────────
 const loadData = async () => {
   loading.value = true
-  try { await new Promise(r => setTimeout(r, 900)) }
-  finally { loading.value = false }
-}
-
-function cycleStatus(emp) {
-  const cycle = { 'on-time': 'late', 'late': 'absent', 'absent': 'on-time' }
-  emp.status = cycle[emp.status]
-  if (emp.status === 'on-time') {
-    emp.arrival = '08:00'; emp.departure = '17:00'
-  } else if (emp.status === 'late') {
-    const m = String(Math.floor(Math.random() * 30) + 5).padStart(2, '0')
-    emp.arrival = `09:${m}`; emp.departure = '18:00'
-  } else {
-    emp.arrival = null; emp.departure = null
+  error.value   = ''
+  try {
+    const res = await api.getFaceIdAttendance(selectedDate.value)
+    employees.value = res.data || []
+  } catch (e) {
+    error.value = e.message || 'Ma\'lumot yuklanmadi'
+  } finally {
+    loading.value = false
   }
 }
 
-function rateColor(r) {
-  return r >= 80 ? '#059669' : r >= 60 ? '#d97706' : '#dc2626'
-}
-function rateGradient(r) {
-  return r >= 80
-    ? 'linear-gradient(90deg,#059669,#34d399)'
-    : r >= 60
-      ? 'linear-gradient(90deg,#d97706,#fbbf24)'
-      : 'linear-gradient(90deg,#dc2626,#f87171)'
-}
+const setToday = () => { selectedDate.value = today }
+
+// Sanani o'zgartirganda avtomatik yuklash
+watch(selectedDate, loadData)
+
+// Auto-refresh: 30 soniyada bir yangilash (bugungi kun uchun)
+let refreshTimer = null
+onMounted(() => {
+  loadData()
+  refreshTimer = setInterval(() => {
+    if (selectedDate.value === today) loadData()
+  }, 30_000)
+})
+onUnmounted(() => clearInterval(refreshTimer))
+
+// HH:MM → daqiqaga
+const toMin = t => { const [h, m] = (t || '0:0').split(':').map(Number); return h * 60 + m }
+
+// Necha daqiqa kech kelgani
+const lateMinutes  = (emp) => Math.max(0, toMin(emp.arrival)   - toMin(emp.come_time))
+// Necha daqiqa erta ketgani
+const earlyMinutes = (emp) => Math.max(0, toMin(emp.leave_time) - toMin(emp.departure))
+
+// ── Rate bar ──────────────────────────────────────────────
+const rateColor    = r => r >= 80 ? '#059669' : r >= 60 ? '#d97706' : '#dc2626'
+const rateGradient = r =>
+  r >= 80 ? 'linear-gradient(90deg,#059669,#34d399)'
+  : r >= 60 ? 'linear-gradient(90deg,#d97706,#fbbf24)'
+  : 'linear-gradient(90deg,#dc2626,#f87171)'
 </script>
 
 <template>
@@ -114,9 +127,9 @@ function rateGradient(r) {
         <h2 class="page-title">Davomat</h2>
         <p class="page-date">{{ formattedDate }}</p>
       </div>
-      <button class="export-btn">
-        <Download size="15" />
-        <span class="export-label">Eksport</span>
+      <button class="export-btn" @click="loadData">
+        <RefreshCw size="15" :class="{ 'spin-anim': loading }" />
+        <span class="export-label">Yangilash</span>
       </button>
     </div>
 
@@ -204,9 +217,9 @@ function rateGradient(r) {
               <th>Xodim</th>
               <th>Kelish</th>
               <th>Ketish</th>
+              <th>Jarima</th>
               <th>Telefon</th>
               <th>Holat</th>
-              <th class="col-act"></th>
             </tr>
           </thead>
           <tbody>
@@ -222,9 +235,9 @@ function rateGradient(r) {
                 </td>
                 <td><div class="sk sk-sm"></div></td>
                 <td><div class="sk sk-sm"></div></td>
+                <td><div class="sk sk-sm"></div></td>
                 <td><div class="sk sk-lg"></div></td>
                 <td><div class="sk sk-md"></div></td>
-                <td></td>
               </tr>
             </template>
 
@@ -232,6 +245,8 @@ function rateGradient(r) {
             <template v-else>
               <tr v-for="(emp, i) in filteredEmployees" :key="emp.id">
                 <td class="td-num">{{ i + 1 }}</td>
+
+                <!-- Xodim -->
                 <td>
                   <div class="emp-cell">
                     <div class="av-ring" :class="emp.status">
@@ -239,23 +254,75 @@ function rateGradient(r) {
                     </div>
                     <div>
                       <p class="emp-name">{{ emp.name }}</p>
-                      <p class="emp-role">{{ emp.role }}</p>
+                      <p class="emp-role">{{ emp.position }}</p>
                     </div>
                   </div>
                 </td>
-                <td><span class="chip chip-in">{{ emp.arrival || '—' }}</span></td>
-                <td><span class="chip chip-out">{{ emp.departure || '—' }}</span></td>
+
+                <!-- Kelish -->
+                <td>
+                  <div class="time-cell">
+                    <span
+                      class="actual-time"
+                      :class="emp.arrival
+                        ? (emp.status === 'late' ? 'time-late' : 'time-ok')
+                        : 'time-none'"
+                    >
+                      {{ emp.arrival || '—' }}
+                    </span>
+                    <div v-if="emp.come_time" class="sched-row">
+                      <Clock size="9" class="sched-ico" />
+                      <span class="sched-val">{{ emp.come_time }}</span>
+                      <span class="sched-lbl">kerak</span>
+                      <span
+                        v-if="emp.status === 'late' && emp.arrival"
+                        class="diff-badge diff-late"
+                      >+{{ lateMinutes(emp) }} daq</span>
+                    </div>
+                  </div>
+                </td>
+
+                <!-- Ketish -->
+                <td>
+                  <div class="time-cell">
+                    <span
+                      class="actual-time"
+                      :class="emp.departure
+                        ? (earlyMinutes(emp) > 0 ? 'time-early' : 'time-ok')
+                        : 'time-none'"
+                    >
+                      {{ emp.departure || '—' }}
+                    </span>
+                    <div v-if="emp.leave_time" class="sched-row">
+                      <Clock size="9" class="sched-ico" />
+                      <span class="sched-val">{{ emp.leave_time }}</span>
+                      <span class="sched-lbl">kerak</span>
+                      <span
+                        v-if="emp.departure && earlyMinutes(emp) > 0"
+                        class="diff-badge diff-early"
+                      >-{{ earlyMinutes(emp) }} daq</span>
+                    </div>
+                  </div>
+                </td>
+
+                <!-- Jarima -->
+                <td>
+                  <span v-if="emp.penalty > 0" class="penalty-chip">
+                    <AlertTriangle size="11" />
+                    {{ emp.penalty.toLocaleString() }} so'm
+                  </span>
+                  <span v-else class="no-penalty">—</span>
+                </td>
+
+                <!-- Telefon -->
                 <td class="phone-td">{{ emp.phone }}</td>
+
+                <!-- Holat -->
                 <td>
                   <span class="pill" :style="{ background: statusCfg[emp.status].bg, color: statusCfg[emp.status].color }">
                     <component :is="statusCfg[emp.status].icon" size="11" />
                     {{ statusCfg[emp.status].label }}
                   </span>
-                </td>
-                <td>
-                  <button class="cycle-btn" @click="cycleStatus(emp)" title="Holat o'zgartirish">
-                    <ChevronDown size="14" />
-                  </button>
                 </td>
               </tr>
             </template>
@@ -294,25 +361,56 @@ function rateGradient(r) {
                 <p class="emp-name">{{ emp.name }}</p>
                 <p class="emp-role">{{ emp.role }}</p>
               </div>
-              <button class="mob-status-btn" @click="cycleStatus(emp)">
-                <component :is="statusCfg[emp.status].icon" size="20" :style="{ color: statusCfg[emp.status].color }" />
-              </button>
-            </div>
-
-            <!-- Bottom row -->
-            <div class="mob-bottom">
-              <div class="mob-time">
-                <span class="mob-time-lbl">Kelish</span>
-                <span class="chip chip-in">{{ emp.arrival || '—' }}</span>
-              </div>
-              <div class="mob-time">
-                <span class="mob-time-lbl">Ketish</span>
-                <span class="chip chip-out">{{ emp.departure || '—' }}</span>
-              </div>
               <span class="pill" :style="{ background: statusCfg[emp.status].bg, color: statusCfg[emp.status].color }">
                 <component :is="statusCfg[emp.status].icon" size="11" />
                 {{ statusCfg[emp.status].label }}
               </span>
+            </div>
+
+            <!-- Bottom row -->
+            <div class="mob-bottom">
+              <!-- Kelish -->
+              <div class="mob-time-block">
+                <span class="mob-time-lbl">Kelish</span>
+                <span
+                  class="actual-time"
+                  :class="emp.arrival ? (emp.status === 'late' ? 'time-late' : 'time-ok') : 'time-none'"
+                >{{ emp.arrival || '—' }}</span>
+                <div v-if="emp.come_time" class="sched-row">
+                  <Clock size="9" class="sched-ico" />
+                  <span class="sched-val">{{ emp.come_time }}</span>
+                  <span
+                    v-if="emp.status === 'late' && emp.arrival"
+                    class="diff-badge diff-late"
+                  >+{{ lateMinutes(emp) }} daq</span>
+                </div>
+              </div>
+
+              <!-- Ketish -->
+              <div class="mob-time-block">
+                <span class="mob-time-lbl">Ketish</span>
+                <span
+                  class="actual-time"
+                  :class="emp.departure ? (earlyMinutes(emp) > 0 ? 'time-early' : 'time-ok') : 'time-none'"
+                >{{ emp.departure || '—' }}</span>
+                <div v-if="emp.leave_time" class="sched-row">
+                  <Clock size="9" class="sched-ico" />
+                  <span class="sched-val">{{ emp.leave_time }}</span>
+                  <span
+                    v-if="emp.departure && earlyMinutes(emp) > 0"
+                    class="diff-badge diff-early"
+                  >-{{ earlyMinutes(emp) }} daq</span>
+                </div>
+              </div>
+
+              <!-- Jarima -->
+              <div v-if="emp.penalty > 0" class="mob-time-block">
+                <span class="mob-time-lbl">Jarima</span>
+                <span class="penalty-chip">
+                  <AlertTriangle size="11" />
+                  {{ emp.penalty.toLocaleString() }}
+                </span>
+              </div>
             </div>
           </div>
         </template>
@@ -663,18 +761,56 @@ function rateGradient(r) {
 .emp-name { font-size: 13px; font-weight: 600; color: var(--t1); margin: 0; transition: color 0.3s ease; }
 .emp-role { font-size: 11px; color: var(--t4); margin: 0; transition: color 0.3s ease; }
 
-/* Chips */
-.chip {
-  display: inline-flex; align-items: center;
-  padding: 3px 10px; border-radius: 6px;
-  font-size: 12.5px; font-weight: 600;
+.phone-td { font-variant-numeric: tabular-nums; font-size: 13px; }
+
+/* ── Time cell (Kelish / Ketish) ── */
+.time-cell {
+  display: flex; flex-direction: column; gap: 3px;
+}
+
+.actual-time {
+  font-size: 14px; font-weight: 700;
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.3px; line-height: 1.2;
+}
+.time-ok   { color: #059669; }
+.time-late { color: #dc2626; }
+.time-early{ color: #d97706; }
+.time-none { color: var(--t5); }
+
+.sched-row {
+  display: flex; align-items: center; gap: 3px;
+  flex-wrap: wrap;
+}
+.sched-ico { color: var(--t5); flex-shrink: 0; }
+.sched-val { font-size: 11px; font-weight: 600; color: var(--t4); font-variant-numeric: tabular-nums; }
+.sched-lbl { font-size: 10px; color: var(--t5); }
+
+.diff-badge {
+  display: inline-flex; align-items: center;
+  padding: 1px 5px; border-radius: 4px;
+  font-size: 10px; font-weight: 700;
   white-space: nowrap;
 }
-.chip-in  { background: var(--accent-bg); color: var(--accent); transition: background-color 0.3s ease, color 0.3s ease; }
-.chip-out { background: var(--surface2); color: var(--t3); border: 1px solid var(--border); transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease; }
+.diff-late  { background: #fee2e2; color: #dc2626; }
+.diff-early { background: #fef3c7; color: #b45309; }
 
-.phone-td { font-variant-numeric: tabular-nums; font-size: 13px; }
+/* ── Penalty chip ── */
+.penalty-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 9px; border-radius: 6px;
+  font-size: 12px; font-weight: 600;
+  background: #fee2e2; color: #dc2626;
+  white-space: nowrap;
+  transition: background-color 0.3s ease;
+}
+.no-penalty { color: var(--t5); font-size: 13px; }
+
+/* ── Mobile time block ── */
+.mob-time-block {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  min-width: 60px;
+}
 
 /* Status pill */
 .pill {
@@ -726,9 +862,12 @@ function rateGradient(r) {
 /* ════════════════════════════════
    Dark mode overrides
    ════════════════════════════════ */
-:global(.layout.dark) .pill[style*='#d1fae5'] { background: rgba(5,150,105,0.15) !important; }
-:global(.layout.dark) .pill[style*='#fee2e2'] { background: rgba(220,38,38,0.15) !important; }
-:global(.layout.dark) .pill[style*='#fef3c7'] { background: rgba(217,119,6,0.15) !important; }
+:global(.layout.dark) .pill[style*='#d1fae5']  { background: rgba(5,150,105,0.15) !important; }
+:global(.layout.dark) .pill[style*='#fee2e2']  { background: rgba(220,38,38,0.15) !important; }
+:global(.layout.dark) .pill[style*='#fef3c7']  { background: rgba(217,119,6,0.15) !important; }
+:global(.layout.dark) .penalty-chip            { background: rgba(220,38,38,0.15); }
+:global(.layout.dark) .diff-late               { background: rgba(220,38,38,0.15); }
+:global(.layout.dark) .diff-early              { background: rgba(180,83,9,0.15); color: #fbbf24; }
 
 /* ════════════════════════════════
    MOBILE ≤ 768px
@@ -826,16 +965,14 @@ function rateGradient(r) {
     transition: border-color 0.3s ease;
   }
 
-  .mob-time {
-    display: flex; flex-direction: column; align-items: center; gap: 3px;
-  }
-
   .mob-time-lbl {
     font-size: 10px; font-weight: 600; color: var(--t4);
     text-transform: uppercase; letter-spacing: 0.4px;
     transition: color 0.3s ease;
   }
 
+  .mob-time-block .sched-row { justify-content: center; }
+  .mob-time-block .actual-time { font-size: 15px; }
   .mob-bottom .pill { margin-left: auto; }
 }
 
